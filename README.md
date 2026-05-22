@@ -9,7 +9,7 @@ The current preview targets macOS and Linux with local profile management, offli
 Preview builds are published on GitHub Releases.
 
 - `PowerMine-0.1.0-macos-amd64.dmg` is the first macOS Intel installer image.
-- Linux AppImage builds are published as `PowerMine-<version>-linux-x86_64.AppImage`.
+- Linux AppImage builds are published as `power-mine-<version>-linux-x86_64.appimage`.
 - Local Linux packaging is available through `make appimage`; the file is written to `dist/`.
 
 ## Codex Tool
@@ -53,7 +53,7 @@ Useful commands:
 - `npm --prefix frontend run build` builds the frontend.
 - `wails dev` starts the desktop app in development mode.
 - `wails build` creates a production build.
-- `make appimage` creates `dist/PowerMine-<version>-linux-<arch>.AppImage`.
+- `make appimage` creates `dist/power-mine-<version>-linux-<arch>.appimage`.
 - `python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile` runs headless mod diagnostics for Codex/local automation.
 
 On Ubuntu 24.04 or another distro that provides WebKitGTK 4.1 instead of 4.0, install `libwebkit2gtk-4.1-dev`; `make appimage` will automatically pass the Wails build tag `webkit2_41` when that package is detected.
@@ -71,6 +71,6 @@ GitHub Actions can build the Linux AppImage without a local Go/Wails setup:
 
 1. Open **Actions**.
 2. Run **Linux AppImage** manually to get the `power-mine-linux-appimage` artifact.
-3. Or publish a GitHub Release; the workflow attaches `dist/*.AppImage` to that release automatically.
+3. Or publish a GitHub Release; the workflow attaches `dist/*.appimage` to that release automatically.
 
 The design and implementation plan live under `docs/superpowers/`.

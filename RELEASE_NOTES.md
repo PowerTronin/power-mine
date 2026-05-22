@@ -19,7 +19,7 @@ License: GPL-3.0.
 ## Installers
 
 - `PowerMine-0.1.0-macos-amd64.dmg` is the first macOS Intel build.
-- `PowerMine-0.1.0-linux-x86_64.AppImage` is the first Linux AppImage build.
+- `power-mine-0.1.0-linux-x86_64.appimage` is the first Linux AppImage build.
 
 ## Codex Tool
 

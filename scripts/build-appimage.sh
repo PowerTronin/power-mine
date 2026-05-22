@@ -83,7 +83,7 @@ VERSION="${VERSION:-0.0.0}"
 APPIMAGE_ARCH="$(appimage_arch_for_target "$TARGET")"
 APPDIR="$APPIMAGE_WORK_DIR/$APP_ID.AppDir"
 BIN_PATH="${BINARY_PATH:-$ROOT_DIR/build/bin/$BIN_NAME}"
-OUTPUT_PATH="${OUTPUT_PATH:-$DIST_DIR/PowerMine-$VERSION-linux-$APPIMAGE_ARCH.AppImage}"
+OUTPUT_PATH="${OUTPUT_PATH:-$DIST_DIR/power-mine-$VERSION-linux-$APPIMAGE_ARCH.appimage}"
 
 if [ "${SKIP_WAILS_BUILD:-0}" != "1" ]; then
   require_command "$WAILS"
