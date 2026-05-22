@@ -92,7 +92,7 @@ if [ "${SKIP_WAILS_BUILD:-0}" != "1" ]; then
       WAILS_BUILD_TAGS="webkit2_41"
     fi
   fi
-  build_args=(build --clean --target "$TARGET")
+  build_args=(build -clean -platform "$TARGET")
   if [ -n "$WAILS_BUILD_TAGS" ]; then
     build_args+=(-tags "$WAILS_BUILD_TAGS")
   fi
