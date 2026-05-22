@@ -55,15 +55,25 @@ jobs:
       - name: Build AppImage
         run: make appimage
 
+      - name: Generate checksum
+        run: |
+          for file in dist/*.appimage; do
+            sha256sum "$file" > "$file.sha256"
+          done
+
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
           name: power-mine-linux-appimage
-          path: dist/*.appimage
+          path: |
+            dist/*.appimage
+            dist/*.appimage.sha256
           if-no-files-found: error
 
       - name: Attach AppImage to GitHub Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.appimage
+          files: |
+            dist/*.appimage
+            dist/*.appimage.sha256
