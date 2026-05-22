@@ -46,11 +46,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm --prefix frontend ci
 
-      - name: Test backend
-        run: go test ./...
-
       - name: Build frontend
         run: npm --prefix frontend run build
+
+      - name: Test backend
+        run: go test ./...
 
       - name: Build AppImage
         run: make appimage
