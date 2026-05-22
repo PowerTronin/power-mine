@@ -2,6 +2,8 @@
 
 First preview release of Power Mine, a Go + Wails Minecraft launcher.
 
+License: GPL-3.0.
+
 ## Included
 
 - Profile creation, install, repair, and launch.

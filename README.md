@@ -11,6 +11,10 @@ Preview builds are published on GitHub Releases.
 - `PowerMine-0.1.0-macos-amd64.dmg` is the first macOS Intel installer image.
 - Linux packaging is planned after the first release workflow is stable.
 
+## License
+
+Power Mine is licensed under the GNU General Public License v3.0. See [LICENSE](LICENSE).
+
 ## Development
 
 Requirements:
