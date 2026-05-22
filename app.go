@@ -41,6 +41,7 @@ type App struct {
 	modsService      *mods.Service
 	running          map[string]*exec.Cmd
 	startupErr       error
+	headless         bool
 }
 
 const maxModrinthDependencyDepth = 12
@@ -73,7 +74,10 @@ func (a *App) startup(ctx context.Context) {
 		a.startupErr = err
 		return
 	}
+	a.initServices(ctx, dataDir)
+}
 
+func (a *App) initServices(ctx context.Context, dataDir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.ctx = ctx
@@ -2006,14 +2010,14 @@ func (a *App) releaseLaunch(profileID string) {
 }
 
 func (a *App) emitInstallProgress(event domain.InstallProgress) {
-	if a.ctx == nil {
+	if a.ctx == nil || a.headless {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, "install:progress", event)
 }
 
 func (a *App) emitJavaProgress(event domain.JavaInstallProgress) {
-	if a.ctx == nil {
+	if a.ctx == nil || a.headless {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, "java:progress", event)
@@ -2064,7 +2068,7 @@ func (a *App) waitForLaunch(profileID string, command *exec.Cmd) {
 }
 
 func (a *App) emitLaunchEvent(event domain.LaunchEvent) {
-	if a.ctx == nil {
+	if a.ctx == nil || a.headless {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, "launch:event", event)

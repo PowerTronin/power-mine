@@ -14,6 +14,10 @@ const (
 )
 
 func AppDataDir() (string, error) {
+	if dataDir := os.Getenv("POWER_MINE_DATA_DIR"); dataDir != "" {
+		return filepath.Clean(dataDir), nil
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

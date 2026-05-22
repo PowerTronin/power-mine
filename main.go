@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"embed"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -12,6 +14,10 @@ import (
 var assets embed.FS
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "headless" {
+		os.Exit(runHeadless(context.Background(), os.Args[2:]))
+	}
+
 	// Create an instance of the app structure
 	app := NewApp()
 

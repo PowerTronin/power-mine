@@ -13,6 +13,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import traceback
 import zipfile
@@ -532,6 +534,194 @@ def list_profile_mod_paths(profile: dict[str, Any]) -> list[Path]:
     )
 
 
+def profile_mods_dir(profile: dict[str, Any], create: bool = False) -> Path:
+    game_dir = Path(str(profile.get("gameDir", ""))).expanduser()
+    if not str(game_dir).strip():
+        raise ValueError("profile gameDir is empty")
+    mods_dir = game_dir / "mods"
+    if create:
+        mods_dir.mkdir(parents=True, exist_ok=True)
+    return mods_dir
+
+
+def clean_mod_file_name(file_name: str) -> str:
+    name = Path(str(file_name).strip()).name
+    if not name:
+        raise ValueError("mod file name is required")
+    lower = name.lower()
+    if "/" in name or "\\" in name or name in {".", ".."}:
+        raise ValueError(f"invalid mod file name: {file_name}")
+    if not (lower.endswith(".jar") or lower.endswith(".jar.disabled")):
+        raise ValueError("mod file name must end with .jar or .jar.disabled")
+    return name
+
+
+def enabled_mod_name(file_name: str) -> str:
+    name = clean_mod_file_name(file_name)
+    if name.lower().endswith(".jar.disabled"):
+        return name[:-len(".disabled")]
+    return name
+
+
+def disabled_mod_name(file_name: str) -> str:
+    name = enabled_mod_name(file_name)
+    return name + ".disabled"
+
+
+def find_existing_mod_path(profile: dict[str, Any], file_name: str) -> Path:
+    mods_dir = profile_mods_dir(profile)
+    candidates = [mods_dir / clean_mod_file_name(file_name)]
+    enabled = enabled_mod_name(file_name)
+    candidates.extend([mods_dir / enabled, mods_dir / (enabled + ".disabled")])
+    seen: set[Path] = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.is_file():
+            return path
+    raise FileNotFoundError(f"mod file not found: {file_name}")
+
+
+def mod_file_summary(path: Path, profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    inspected = inspect_mod(str(path), profile)
+    return {
+        "fileName": path.name,
+        "path": str(path),
+        "enabled": not path.name.lower().endswith(".disabled"),
+        "size": inspected.get("size", 0),
+        "sha1": inspected.get("sha1", ""),
+        "loaders": inspected.get("loaders", []),
+        "issues": inspected.get("issues", []),
+        "warnings": inspected.get("warnings", []),
+    }
+
+
+def import_profile_mod(
+    ctx: DiagnosticContext,
+    profile_id: str | None,
+    jar_path: str,
+    file_name: str | None = None,
+    enabled: bool = True,
+    replace: bool = False,
+) -> dict[str, Any]:
+    profile = find_profile(ctx, profile_id)
+    source = Path(jar_path).expanduser()
+    if not source.is_file():
+        raise FileNotFoundError(f"mod jar not found: {source}")
+    source_name = clean_mod_file_name(source.name)
+    target_name = clean_mod_file_name(file_name) if file_name else source_name
+    target_name = enabled_mod_name(target_name) if enabled else disabled_mod_name(target_name)
+
+    inspection = inspect_mod(str(source), profile)
+    if not inspection.get("readable"):
+        raise ValueError("source is not a readable mod jar")
+
+    mods_dir = profile_mods_dir(profile, create=True)
+    target = mods_dir / target_name
+    counterpart = mods_dir / (disabled_mod_name(target_name) if enabled else enabled_mod_name(target_name))
+    if not replace and (target.exists() or counterpart.exists()):
+        raise FileExistsError(f"mod already exists in profile: {target_name}")
+    if target.exists() and target.is_dir():
+        raise IsADirectoryError(str(target))
+
+    temp = target.with_name("." + target.name + ".power-mine-tmp")
+    try:
+        shutil.copy2(source, temp)
+        temp.chmod(0o644)
+        temp.replace(target)
+        if replace and counterpart.exists() and counterpart != target:
+            counterpart.unlink()
+    finally:
+        if temp.exists():
+            temp.unlink()
+
+    return {
+        "profile": profile_brief(profile),
+        "imported": mod_file_summary(target, profile),
+        "modList": [mod_file_summary(path, profile) for path in list_profile_mod_paths(profile)],
+    }
+
+
+def set_profile_mod_enabled(ctx: DiagnosticContext, profile_id: str | None, file_name: str, enabled: bool) -> dict[str, Any]:
+    profile = find_profile(ctx, profile_id)
+    current = find_existing_mod_path(profile, file_name)
+    target = profile_mods_dir(profile) / (enabled_mod_name(current.name) if enabled else disabled_mod_name(current.name))
+    if current == target:
+        changed = False
+    else:
+        if target.exists():
+            raise FileExistsError(f"target mod file already exists: {target.name}")
+        current.rename(target)
+        changed = True
+    return {
+        "profile": profile_brief(profile),
+        "changed": changed,
+        "mod": mod_file_summary(target, profile),
+        "modList": [mod_file_summary(path, profile) for path in list_profile_mod_paths(profile)],
+    }
+
+
+def delete_profile_mod(ctx: DiagnosticContext, profile_id: str | None, file_name: str) -> dict[str, Any]:
+    profile = find_profile(ctx, profile_id)
+    current = find_existing_mod_path(profile, file_name)
+    summary = mod_file_summary(current, profile)
+    current.unlink()
+    return {
+        "profile": profile_brief(profile),
+        "deleted": summary,
+        "modList": [mod_file_summary(path, profile) for path in list_profile_mod_paths(profile)],
+    }
+
+
+def find_power_mine_binary() -> list[str]:
+    configured = os.environ.get("POWER_MINE_BINARY")
+    if configured:
+        return [configured]
+    repo = Path(os.environ.get("POWER_MINE_REPO", Path(__file__).resolve().parents[2])).expanduser()
+    candidates = [
+        repo / "build" / "bin" / "power-mine",
+        repo / "dist" / "power-mine-0.1.0-linux-x86_64.appimage",
+    ]
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return [str(candidate)]
+    if shutil.which("go") and (repo / "go.mod").is_file():
+        return ["go", "run", "."]
+    raise FileNotFoundError("Power Mine binary not found; set POWER_MINE_BINARY or build the launcher")
+
+
+def run_power_mine_headless(ctx: DiagnosticContext, command: str, profile_id: str | None) -> dict[str, Any]:
+    profile = find_profile(ctx, profile_id)
+    repo = os.environ.get("POWER_MINE_REPO", str(Path(__file__).resolve().parents[2]))
+    invocation = find_power_mine_binary() + [
+        "headless",
+        command,
+        "--data-dir",
+        str(ctx.data_dir),
+        "--profile-id",
+        profile["id"],
+    ]
+    completed = subprocess.run(
+        invocation,
+        cwd=repo,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        payload = {"ok": False, "command": command, "error": completed.stdout.strip()}
+    payload["exitCode"] = completed.returncode
+    if completed.stderr.strip():
+        payload["stderr"] = completed.stderr.strip()
+    if completed.returncode != 0 and not payload.get("error"):
+        payload["error"] = completed.stderr.strip() or f"headless command failed: {command}"
+    return payload
+
+
 LOG_PATTERNS = [
     ("error", "unsupported_java", re.compile(r"UnsupportedClassVersionError|class file version", re.I), "Java version mismatch"),
     ("error", "missing_class", re.compile(r"NoClassDefFoundError|ClassNotFoundException", re.I), "Missing dependency or wrong loader/version"),
@@ -667,6 +857,82 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "import_profile_mod",
+        "description": "Copy a readable mod jar into a Power Mine profile's mods folder.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["jar_path"],
+            "properties": {
+                "jar_path": {"type": "string", "description": "Path to the source .jar mod file."},
+                "profile_id": {"type": "string", "description": "Profile id. Defaults to the selected profile."},
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+                "file_name": {"type": "string", "description": "Optional target file name in the profile mods folder."},
+                "enabled": {"type": "boolean", "description": "Install enabled as .jar, or disabled as .jar.disabled.", "default": True},
+                "replace": {"type": "boolean", "description": "Replace an existing mod file with the same name.", "default": False},
+            },
+        },
+    },
+    {
+        "name": "set_profile_mod_enabled",
+        "description": "Enable or disable an installed profile mod by renaming .jar/.jar.disabled.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["file_name", "enabled"],
+            "properties": {
+                "file_name": {"type": "string", "description": "Installed mod file name."},
+                "enabled": {"type": "boolean", "description": "Whether the mod should be enabled."},
+                "profile_id": {"type": "string", "description": "Profile id. Defaults to the selected profile."},
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+            },
+        },
+    },
+    {
+        "name": "delete_profile_mod",
+        "description": "Delete an installed profile mod file.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["file_name"],
+            "properties": {
+                "file_name": {"type": "string", "description": "Installed mod file name."},
+                "profile_id": {"type": "string", "description": "Profile id. Defaults to the selected profile."},
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+            },
+        },
+    },
+    {
+        "name": "install_profile",
+        "description": "Install a Power Mine profile through the launcher's headless command.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "profile_id": {"type": "string", "description": "Profile id. Defaults to the selected profile."},
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+            },
+        },
+    },
+    {
+        "name": "repair_profile",
+        "description": "Repair a Power Mine profile through the launcher's headless command.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "profile_id": {"type": "string", "description": "Profile id. Defaults to the selected profile."},
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+            },
+        },
+    },
+    {
+        "name": "launch_profile",
+        "description": "Launch a Power Mine profile through the launcher's headless command.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "profile_id": {"type": "string", "description": "Profile id. Defaults to the selected profile."},
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+            },
+        },
+    },
 ]
 
 
@@ -720,6 +986,25 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     elif name == "diagnose_mod":
         profile = find_profile(ctx, arguments.get("profile_id")) if arguments.get("profile_id") else None
         data = inspect_mod(arguments["jar_path"], profile)
+    elif name == "import_profile_mod":
+        data = import_profile_mod(
+            ctx,
+            arguments.get("profile_id"),
+            arguments["jar_path"],
+            arguments.get("file_name"),
+            bool(arguments.get("enabled", True)),
+            bool(arguments.get("replace", False)),
+        )
+    elif name == "set_profile_mod_enabled":
+        data = set_profile_mod_enabled(ctx, arguments.get("profile_id"), arguments["file_name"], bool(arguments["enabled"]))
+    elif name == "delete_profile_mod":
+        data = delete_profile_mod(ctx, arguments.get("profile_id"), arguments["file_name"])
+    elif name == "install_profile":
+        data = run_power_mine_headless(ctx, "install-profile", arguments.get("profile_id"))
+    elif name == "repair_profile":
+        data = run_power_mine_headless(ctx, "repair-profile", arguments.get("profile_id"))
+    elif name == "launch_profile":
+        data = run_power_mine_headless(ctx, "launch-profile", arguments.get("profile_id"))
     else:
         raise ValueError(f"unknown tool: {name}")
     return {"content": [{"type": "text", "text": json_dump(data, pretty=True)}]}
@@ -781,6 +1066,31 @@ def main(argv: list[str] | None = None) -> int:
     diagnose_mod_parser.add_argument("jar_path")
     diagnose_mod_parser.add_argument("--profile-id", help="Compare against a launcher profile")
 
+    import_mod_parser = subparsers.add_parser("import-mod", help="Import a mod jar into a profile")
+    import_mod_parser.add_argument("jar_path")
+    import_mod_parser.add_argument("--profile-id", help="Profile id; defaults to selected profile")
+    import_mod_parser.add_argument("--file-name", help="Target file name in the profile mods folder")
+    import_mod_parser.add_argument("--disabled", action="store_true", help="Install as .jar.disabled")
+    import_mod_parser.add_argument("--replace", action="store_true", help="Replace an existing installed mod")
+
+    set_mod_parser = subparsers.add_parser("set-mod-enabled", help="Enable or disable an installed mod")
+    set_mod_parser.add_argument("file_name")
+    set_mod_parser.add_argument("--profile-id", help="Profile id; defaults to selected profile")
+    set_mod_parser.add_argument("--enabled", action=argparse.BooleanOptionalAction, default=True)
+
+    delete_mod_parser = subparsers.add_parser("delete-mod", help="Delete an installed mod")
+    delete_mod_parser.add_argument("file_name")
+    delete_mod_parser.add_argument("--profile-id", help="Profile id; defaults to selected profile")
+
+    install_profile_parser = subparsers.add_parser("install-profile", help="Install a profile via headless launcher")
+    install_profile_parser.add_argument("profile_id", nargs="?", help="Profile id; defaults to selected profile")
+
+    repair_profile_parser = subparsers.add_parser("repair-profile", help="Repair a profile via headless launcher")
+    repair_profile_parser.add_argument("profile_id", nargs="?", help="Profile id; defaults to selected profile")
+
+    launch_profile_parser = subparsers.add_parser("launch-profile", help="Launch a profile via headless launcher")
+    launch_profile_parser.add_argument("profile_id", nargs="?", help="Profile id; defaults to selected profile")
+
     subparsers.add_parser("mcp", help="Run the MCP stdio server")
 
     args = parser.parse_args(argv)
@@ -788,15 +1098,31 @@ def main(argv: list[str] | None = None) -> int:
         return run_mcp_server()
 
     ctx = context_from_args(args.data_dir)
-    if args.command == "list-profiles":
-        output = list_profiles(ctx)
-    elif args.command == "diagnose-profile":
-        output = diagnose_profile(ctx, args.profile_id, not args.no_logs, args.max_log_bytes)
-    elif args.command == "diagnose-mod":
-        profile = find_profile(ctx, args.profile_id) if args.profile_id else None
-        output = inspect_mod(args.jar_path, profile)
-    else:
-        parser.error(f"unknown command: {args.command}")
+    try:
+        if args.command == "list-profiles":
+            output = list_profiles(ctx)
+        elif args.command == "diagnose-profile":
+            output = diagnose_profile(ctx, args.profile_id, not args.no_logs, args.max_log_bytes)
+        elif args.command == "diagnose-mod":
+            profile = find_profile(ctx, args.profile_id) if args.profile_id else None
+            output = inspect_mod(args.jar_path, profile)
+        elif args.command == "import-mod":
+            output = import_profile_mod(ctx, args.profile_id, args.jar_path, args.file_name, not args.disabled, args.replace)
+        elif args.command == "set-mod-enabled":
+            output = set_profile_mod_enabled(ctx, args.profile_id, args.file_name, args.enabled)
+        elif args.command == "delete-mod":
+            output = delete_profile_mod(ctx, args.profile_id, args.file_name)
+        elif args.command == "install-profile":
+            output = run_power_mine_headless(ctx, "install-profile", args.profile_id)
+        elif args.command == "repair-profile":
+            output = run_power_mine_headless(ctx, "repair-profile", args.profile_id)
+        elif args.command == "launch-profile":
+            output = run_power_mine_headless(ctx, "launch-profile", args.profile_id)
+        else:
+            parser.error(f"unknown command: {args.command}")
+    except Exception as exc:
+        print(json_dump({"ok": False, "command": args.command, "error": str(exc)}, pretty=args.pretty))
+        return 1
     print(json_dump(output, pretty=args.pretty))
     return 0
 

@@ -22,6 +22,9 @@ CLI examples:
 python3 tools/codex/power_mine_mcp.py --pretty list-profiles
 python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile
 python3 tools/codex/power_mine_mcp.py --pretty diagnose-mod /path/to/mod.jar --profile-id <profile-id>
+python3 tools/codex/power_mine_mcp.py --pretty import-mod /path/to/mod.jar --profile-id <profile-id>
+python3 tools/codex/power_mine_mcp.py --pretty repair-profile <profile-id>
+python3 tools/codex/power_mine_mcp.py --pretty launch-profile <profile-id>
 ```
 
 The same script can run as an MCP server for Codex:
@@ -55,6 +58,7 @@ Useful commands:
 - `wails build` creates a production build.
 - `make appimage` creates `dist/power-mine-<version>-linux-<arch>.appimage`.
 - `python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile` runs headless mod diagnostics for Codex/local automation.
+- `./build/bin/power-mine headless repair-profile <profile-id>` repairs a profile without opening the GUI.
 
 On Ubuntu 24.04 or another distro that provides WebKitGTK 4.1 instead of 4.0, install `libwebkit2gtk-4.1-dev`; `make appimage` will automatically pass the Wails build tag `webkit2_41` when that package is detected.
 
