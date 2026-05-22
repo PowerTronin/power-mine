@@ -1,0 +1,805 @@
+#!/usr/bin/env python3
+"""Power Mine diagnostics CLI and MCP server.
+
+The script intentionally uses only the Python standard library so Codex can run
+it on a developer machine without installing a separate package first.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import json
+import os
+import re
+import sys
+import traceback
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
+    tomllib = None
+
+
+MAX_LOG_BYTES = 512 * 1024
+MOD_FILE_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
+
+
+@dataclass
+class DiagnosticContext:
+    data_dir: Path
+
+
+def default_data_dir() -> Path:
+    if os.environ.get("POWER_MINE_DATA_DIR"):
+        return Path(os.environ["POWER_MINE_DATA_DIR"]).expanduser()
+
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "Power Mine"
+    if sys.platform.startswith("linux"):
+        if os.environ.get("XDG_DATA_HOME"):
+            return Path(os.environ["XDG_DATA_HOME"]).expanduser() / "power-mine"
+        return home / ".local" / "share" / "power-mine"
+    return home / ".power-mine"
+
+
+def context_from_args(data_dir: str | None = None) -> DiagnosticContext:
+    return DiagnosticContext(data_dir=Path(data_dir).expanduser() if data_dir else default_data_dir())
+
+
+def read_json(path: Path, default: Any) -> Any:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return default
+
+
+def load_profiles(ctx: DiagnosticContext) -> dict[str, Any]:
+    raw = read_json(ctx.data_dir / "profiles.json", {"selectedProfileId": "", "profiles": []})
+    profiles = raw.get("profiles") if isinstance(raw, dict) else []
+    if not isinstance(profiles, list):
+        profiles = []
+    return {
+        "dataDir": str(ctx.data_dir),
+        "selectedProfileId": raw.get("selectedProfileId", "") if isinstance(raw, dict) else "",
+        "profiles": profiles,
+    }
+
+
+def find_profile(ctx: DiagnosticContext, profile_id: str | None) -> dict[str, Any]:
+    data = load_profiles(ctx)
+    wanted = (profile_id or data.get("selectedProfileId") or "").strip()
+    profiles = data.get("profiles", [])
+    if not wanted and len(profiles) == 1:
+        return profiles[0]
+    for profile in profiles:
+        if profile.get("id") == wanted:
+            return profile
+    if wanted:
+        raise ValueError(f"profile not found: {wanted}")
+    raise ValueError("no profile selected; pass profile_id")
+
+
+def profile_brief(profile: dict[str, Any]) -> dict[str, Any]:
+    loader = profile.get("loader") or {}
+    return {
+        "id": profile.get("id", ""),
+        "name": profile.get("name", ""),
+        "minecraftVersion": profile.get("minecraftVersion", ""),
+        "loader": loader.get("type", "vanilla"),
+        "loaderVersion": loader.get("version", ""),
+        "gameDir": profile.get("gameDir", ""),
+        "installStatus": (profile.get("install") or {}).get("status", ""),
+    }
+
+
+def sha1_file(path: Path) -> str:
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def read_zip_json(jar: zipfile.ZipFile, name: str) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        with jar.open(name) as handle:
+            raw = handle.read().decode("utf-8")
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data, None
+        return None, f"{name} is not a JSON object"
+    except KeyError:
+        return None, None
+    except Exception as exc:
+        return None, f"cannot parse {name}: {exc}"
+
+
+def read_zip_text(jar: zipfile.ZipFile, name: str) -> tuple[str | None, str | None]:
+    try:
+        with jar.open(name) as handle:
+            return handle.read().decode("utf-8", errors="replace"), None
+    except KeyError:
+        return None, None
+    except Exception as exc:
+        return None, f"cannot read {name}: {exc}"
+
+
+def parse_toml(text: str) -> dict[str, Any]:
+    if tomllib is None:
+        return parse_toml_fallback(text)
+    try:
+        data = tomllib.loads(text)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return parse_toml_fallback(text)
+
+
+def parse_toml_fallback(text: str) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    mods = []
+    for block in re.split(r"(?m)^\s*\[\[mods\]\]\s*$", text)[1:]:
+        item: dict[str, str] = {}
+        for key, value in re.findall(r'(?m)^\s*([A-Za-z0-9_.-]+)\s*=\s*"([^"]*)"', block):
+            item[key] = value
+        if item:
+            mods.append(item)
+    if mods:
+        result["mods"] = mods
+    for key in ("modLoader", "loaderVersion", "license", "issueTrackerURL"):
+        match = re.search(rf'(?m)^\s*{re.escape(key)}\s*=\s*"([^"]*)"', text)
+        if match:
+            result[key] = match.group(1)
+    return result
+
+
+def fabric_dependencies(metadata: dict[str, Any]) -> dict[str, Any]:
+    deps: dict[str, Any] = {}
+    for section in ("depends", "breaks", "recommends", "suggests"):
+        value = metadata.get(section)
+        if isinstance(value, dict):
+            deps[section] = value
+    return deps
+
+
+def inspect_fabric_metadata(path: str, metadata: dict[str, Any], names: set[str]) -> dict[str, Any]:
+    mod_id = str(metadata.get("id", ""))
+    result = {
+        "loader": "fabric",
+        "metadataFile": path,
+        "id": mod_id,
+        "name": metadata.get("name") or mod_id,
+        "version": metadata.get("version", ""),
+        "environment": metadata.get("environment", "*"),
+        "depends": fabric_dependencies(metadata),
+        "entrypoints": metadata.get("entrypoints", {}),
+        "mixins": metadata.get("mixins", []),
+        "accessWidener": metadata.get("accessWidener", ""),
+        "issues": [],
+        "warnings": [],
+    }
+    if mod_id and not MOD_FILE_RE.match(mod_id):
+        result["warnings"].append(f"Fabric mod id has unusual format: {mod_id}")
+
+    for mixin in as_list(metadata.get("mixins")):
+        mixin_path = mixin.get("config") if isinstance(mixin, dict) else mixin
+        if isinstance(mixin_path, str) and mixin_path and mixin_path not in names:
+            result["issues"].append(f"Referenced mixin config is missing: {mixin_path}")
+
+    widener = metadata.get("accessWidener")
+    if isinstance(widener, str) and widener and widener not in names:
+        result["issues"].append(f"Referenced access widener is missing: {widener}")
+    return result
+
+
+def inspect_quilt_metadata(path: str, metadata: dict[str, Any], names: set[str]) -> dict[str, Any]:
+    loader = metadata.get("quilt_loader") if isinstance(metadata.get("quilt_loader"), dict) else {}
+    meta = loader.get("metadata") if isinstance(loader.get("metadata"), dict) else {}
+    mod_id = str(loader.get("id", ""))
+    result = {
+        "loader": "quilt",
+        "metadataFile": path,
+        "id": mod_id,
+        "name": meta.get("name") or mod_id,
+        "version": loader.get("version", ""),
+        "depends": {"depends": loader.get("depends", [])},
+        "entrypoints": metadata.get("entrypoints", {}),
+        "mixins": metadata.get("mixin", []),
+        "issues": [],
+        "warnings": [],
+    }
+    if mod_id and not MOD_FILE_RE.match(mod_id):
+        result["warnings"].append(f"Quilt mod id has unusual format: {mod_id}")
+    for mixin in as_list(metadata.get("mixin")):
+        if isinstance(mixin, str) and mixin and mixin not in names:
+            result["issues"].append(f"Referenced mixin config is missing: {mixin}")
+    return result
+
+
+def inspect_forge_metadata(path: str, text: str, loader: str) -> dict[str, Any]:
+    data = parse_toml(text)
+    mods = data.get("mods", [])
+    first_mod = mods[0] if isinstance(mods, list) and mods else {}
+    dependencies = []
+    raw_dependencies = data.get("dependencies")
+    if isinstance(raw_dependencies, dict):
+        for mod_id, entries in raw_dependencies.items():
+            for entry in as_list(entries):
+                if isinstance(entry, dict):
+                    item = dict(entry)
+                    item.setdefault("owner", mod_id)
+                    dependencies.append(item)
+    return {
+        "loader": loader,
+        "metadataFile": path,
+        "id": first_mod.get("modId", "") if isinstance(first_mod, dict) else "",
+        "name": first_mod.get("displayName", "") if isinstance(first_mod, dict) else "",
+        "version": first_mod.get("version", "") if isinstance(first_mod, dict) else "",
+        "modLoader": data.get("modLoader", ""),
+        "loaderVersion": data.get("loaderVersion", ""),
+        "dependencies": dependencies,
+        "issues": [],
+        "warnings": [],
+    }
+
+
+def inspect_mod(jar_path: str, profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    path = Path(jar_path).expanduser()
+    result: dict[str, Any] = {
+        "path": str(path),
+        "fileName": path.name,
+        "enabled": not path.name.lower().endswith(".disabled"),
+        "exists": path.exists(),
+        "readable": False,
+        "size": 0,
+        "sha1": "",
+        "loaders": [],
+        "metadata": [],
+        "issues": [],
+        "warnings": [],
+        "compatibility": [],
+    }
+
+    if not path.exists():
+        result["issues"].append("mod file does not exist")
+        return result
+    if not path.is_file():
+        result["issues"].append("mod path is not a file")
+        return result
+
+    result["size"] = path.stat().st_size
+    try:
+        result["sha1"] = sha1_file(path)
+    except Exception as exc:
+        result["warnings"].append(f"cannot calculate sha1: {exc}")
+
+    try:
+        with zipfile.ZipFile(path) as jar:
+            names = set(jar.namelist())
+            result["readable"] = True
+
+            fabric, error = read_zip_json(jar, "fabric.mod.json")
+            if error:
+                result["issues"].append(error)
+            if fabric:
+                result["loaders"].append("fabric")
+                result["metadata"].append(inspect_fabric_metadata("fabric.mod.json", fabric, names))
+
+            quilt, error = read_zip_json(jar, "quilt.mod.json")
+            if error:
+                result["issues"].append(error)
+            if quilt:
+                result["loaders"].append("quilt")
+                result["metadata"].append(inspect_quilt_metadata("quilt.mod.json", quilt, names))
+
+            for metadata_file, loader in (
+                ("META-INF/mods.toml", "forge"),
+                ("META-INF/neoforge.mods.toml", "neoforge"),
+            ):
+                text, error = read_zip_text(jar, metadata_file)
+                if error:
+                    result["issues"].append(error)
+                if text:
+                    result["loaders"].append(loader)
+                    result["metadata"].append(inspect_forge_metadata(metadata_file, text, loader))
+
+            if "META-INF/MANIFEST.MF" not in names:
+                result["warnings"].append("jar has no META-INF/MANIFEST.MF")
+    except zipfile.BadZipFile:
+        result["issues"].append("file is not a readable jar/zip archive")
+        return result
+    except Exception as exc:
+        result["issues"].append(f"cannot inspect jar: {exc}")
+        return result
+
+    if not result["loaders"]:
+        result["issues"].append("no recognized Fabric, Quilt, Forge, or NeoForge metadata found")
+    if len(set(result["loaders"])) > 1:
+        result["warnings"].append("jar declares multiple loader metadata files")
+
+    for metadata in result["metadata"]:
+        result["issues"].extend(metadata.get("issues", []))
+        result["warnings"].extend(metadata.get("warnings", []))
+
+    if profile:
+        result["compatibility"] = compatibility_with_profile(result, profile)
+        for item in result["compatibility"]:
+            if item.get("severity") == "error":
+                result["issues"].append(item["message"])
+            elif item.get("severity") == "warning":
+                result["warnings"].append(item["message"])
+    return result
+
+
+def version_parts(value: str) -> list[int]:
+    return [int(part) for part in re.findall(r"\d+", value)[:4]]
+
+
+def compare_versions(left: str, right: str) -> int:
+    a = version_parts(left)
+    b = version_parts(right)
+    width = max(len(a), len(b), 1)
+    a += [0] * (width - len(a))
+    b += [0] * (width - len(b))
+    return (a > b) - (a < b)
+
+
+def matches_single_constraint(version: str, constraint: str) -> bool | None:
+    constraint = constraint.strip()
+    if not constraint or constraint == "*":
+        return True
+    if "||" in constraint:
+        values = [matches_constraint(version, item) for item in constraint.split("||")]
+        return True if True in values else None if None in values else False
+    if constraint.endswith(".x"):
+        return version.startswith(constraint[:-1])
+    if constraint.startswith(">="):
+        return compare_versions(version, constraint[2:].strip()) >= 0
+    if constraint.startswith("<="):
+        return compare_versions(version, constraint[2:].strip()) <= 0
+    if constraint.startswith(">"):
+        return compare_versions(version, constraint[1:].strip()) > 0
+    if constraint.startswith("<"):
+        return compare_versions(version, constraint[1:].strip()) < 0
+    if constraint.startswith("="):
+        return compare_versions(version, constraint[1:].strip()) == 0
+    if constraint.startswith("~"):
+        base = constraint[1:].strip()
+        parts = version_parts(base)
+        if len(parts) >= 2:
+            prefix = ".".join(str(part) for part in parts[:2]) + "."
+            return version == base or version.startswith(prefix)
+        return None
+    if constraint.startswith("[") or constraint.startswith("("):
+        return matches_maven_range(version, constraint)
+    if re.match(r"^\d+(\.\d+)*$", constraint):
+        return compare_versions(version, constraint) == 0
+    return None
+
+
+def matches_maven_range(version: str, constraint: str) -> bool | None:
+    if re.match(r"^\[[^,\]]+\]$", constraint.strip()):
+        return compare_versions(version, constraint.strip()[1:-1]) == 0
+    match = re.match(r"^([\[(])([^,]*),?([^\])]*)([])])$", constraint.strip())
+    if not match:
+        return None
+    lower_inclusive = match.group(1) == "["
+    upper_inclusive = match.group(4) == "]"
+    lower = match.group(2).strip()
+    upper = match.group(3).strip()
+    if lower:
+        cmp_lower = compare_versions(version, lower)
+        if cmp_lower < 0 or (cmp_lower == 0 and not lower_inclusive):
+            return False
+    if upper:
+        cmp_upper = compare_versions(version, upper)
+        if cmp_upper > 0 or (cmp_upper == 0 and not upper_inclusive):
+            return False
+    return True
+
+
+def matches_constraint(version: str, raw_constraint: Any) -> bool | None:
+    if isinstance(raw_constraint, list):
+        values = [matches_constraint(version, item) for item in raw_constraint]
+        return True if True in values else None if None in values else False
+    if isinstance(raw_constraint, dict):
+        raw_constraint = raw_constraint.get("version") or raw_constraint.get("versions")
+    if not isinstance(raw_constraint, str):
+        return None
+    raw_constraint = raw_constraint.strip()
+    if raw_constraint.startswith(("[", "(")) and raw_constraint.endswith(("]", ")")):
+        return matches_single_constraint(version, raw_constraint)
+    parts = [part for part in re.split(r"(?<![<>=])\s+|,\s*", raw_constraint) if part.strip()]
+    if not parts:
+        return True
+    results = [matches_single_constraint(version, part) for part in parts]
+    if False in results:
+        return False
+    if None in results:
+        return None
+    return True
+
+
+def required_java_for_minecraft(minecraft_version: str) -> int | None:
+    if not version_parts(minecraft_version):
+        return None
+    if compare_versions(minecraft_version, "1.20.5") >= 0:
+        return 21
+    if compare_versions(minecraft_version, "1.18") >= 0:
+        return 17
+    return 8
+
+
+def dependency_value(metadata: dict[str, Any], *names: str) -> Any:
+    depends = metadata.get("depends", {})
+    if isinstance(depends, dict):
+        for section in ("depends", "breaks", "recommends", "suggests"):
+            values = depends.get(section)
+            if not isinstance(values, dict):
+                continue
+            for name in names:
+                if name in values:
+                    return values[name]
+    return None
+
+
+def forge_dependency_value(metadata: dict[str, Any], mod_id: str) -> Any:
+    for item in metadata.get("dependencies", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("modId") == mod_id:
+            return item.get("versionRange")
+    return None
+
+
+def compatibility_with_profile(inspection: dict[str, Any], profile: dict[str, Any]) -> list[dict[str, str]]:
+    loader = ((profile.get("loader") or {}).get("type") or "vanilla").lower()
+    minecraft_version = str(profile.get("minecraftVersion", ""))
+    found = set(inspection.get("loaders", []))
+    items: list[dict[str, str]] = []
+
+    if not found:
+        return items
+    if loader == "vanilla":
+        items.append({"severity": "error", "message": "profile is vanilla but the jar is a loader mod"})
+    elif loader == "fabric" and "fabric" not in found:
+        items.append({"severity": "error", "message": f"profile loader is Fabric but jar declares {', '.join(sorted(found))}"})
+    elif loader == "quilt" and not (found & {"quilt", "fabric"}):
+        items.append({"severity": "error", "message": f"profile loader is Quilt but jar declares {', '.join(sorted(found))}"})
+    elif loader == "forge" and "forge" not in found:
+        items.append({"severity": "error", "message": f"profile loader is Forge but jar declares {', '.join(sorted(found))}"})
+    elif loader == "neoforge" and "neoforge" not in found:
+        items.append({"severity": "error", "message": f"profile loader is NeoForge but jar declares {', '.join(sorted(found))}"})
+    if loader == "quilt" and found == {"fabric"}:
+        items.append({"severity": "warning", "message": "Fabric mod in a Quilt profile may need Quilt Standard Libraries or QFAPI"})
+
+    for metadata in inspection.get("metadata", []):
+        mc_constraint = dependency_value(metadata, "minecraft") or forge_dependency_value(metadata, "minecraft")
+        if mc_constraint:
+            match = matches_constraint(minecraft_version, mc_constraint)
+            if match is False:
+                items.append({
+                    "severity": "error",
+                    "message": f"mod declares Minecraft constraint {mc_constraint!r}, profile uses {minecraft_version}",
+                })
+            elif match is None:
+                items.append({
+                    "severity": "warning",
+                    "message": f"cannot verify Minecraft constraint {mc_constraint!r} against {minecraft_version}",
+                })
+
+        java_constraint = dependency_value(metadata, "java")
+        if java_constraint:
+            required = required_java_for_minecraft(minecraft_version)
+            match = matches_constraint(str(required or ""), java_constraint)
+            if required and match is False:
+                items.append({
+                    "severity": "warning",
+                    "message": f"mod declares Java constraint {java_constraint!r}; Minecraft {minecraft_version} normally uses Java {required}",
+                })
+            elif match is None:
+                items.append({"severity": "warning", "message": f"cannot verify Java constraint {java_constraint!r}"})
+    return items
+
+
+def list_profile_mod_paths(profile: dict[str, Any]) -> list[Path]:
+    game_dir = Path(str(profile.get("gameDir", ""))).expanduser()
+    mods_dir = game_dir / "mods"
+    if not mods_dir.is_dir():
+        return []
+    return sorted(
+        [
+            path
+            for path in mods_dir.iterdir()
+            if path.is_file() and (path.name.lower().endswith(".jar") or path.name.lower().endswith(".jar.disabled"))
+        ],
+        key=lambda item: item.name.lower(),
+    )
+
+
+LOG_PATTERNS = [
+    ("error", "unsupported_java", re.compile(r"UnsupportedClassVersionError|class file version", re.I), "Java version mismatch"),
+    ("error", "missing_class", re.compile(r"NoClassDefFoundError|ClassNotFoundException", re.I), "Missing dependency or wrong loader/version"),
+    ("error", "mixin_failed", re.compile(r"Mixin apply failed|MixinTransformerError|InjectionError|InvalidMixinException", re.I), "Mixin failure"),
+    ("error", "missing_dependency", re.compile(r"requires.*(?:mod|dependency)|missing.*(?:mod|dependency)|ModResolutionException", re.I), "Missing dependency"),
+    ("error", "duplicate_mod", re.compile(r"duplicate mod|DuplicateModsFoundException|Duplicate mod", re.I), "Duplicate mod"),
+    ("error", "mod_loading", re.compile(r"ModLoadingException|Loading errors encountered|Failed to load mod", re.I), "Mod loading failure"),
+    ("error", "exception", re.compile(r"\b(FATAL|ERROR)\b|Exception in thread|Caused by:", re.I), "Exception or error line"),
+]
+
+
+def read_log_tail(path: Path, max_bytes: int) -> tuple[str, bool]:
+    if path.suffix == ".gz":
+        with gzip.open(path, "rb") as handle:
+            raw = handle.read(max_bytes + 1)
+        return raw[:max_bytes].decode("utf-8", errors="replace"), len(raw) > max_bytes
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if size > max_bytes:
+            handle.seek(-max_bytes, os.SEEK_END)
+        raw = handle.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raw = raw[-max_bytes:]
+    return raw.decode("utf-8", errors="replace"), size > max_bytes
+
+
+def recent_log_paths(profile: dict[str, Any], limit: int = 5) -> list[Path]:
+    game_dir = Path(str(profile.get("gameDir", ""))).expanduser()
+    candidates: list[Path] = []
+    for folder, suffixes in ((game_dir / "logs", (".log", ".log.gz")), (game_dir / "crash-reports", (".txt",))):
+        if folder.is_dir():
+            candidates.extend([path for path in folder.iterdir() if path.is_file() and path.name.lower().endswith(suffixes)])
+    if game_dir.is_dir():
+        candidates.extend([
+            path
+            for path in game_dir.iterdir()
+            if path.is_file() and path.name.startswith("hs_err_pid") and path.name.lower().endswith(".log")
+        ])
+    return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
+
+
+def analyze_log(path: Path, max_bytes: int) -> dict[str, Any]:
+    content, truncated = read_log_tail(path, max_bytes)
+    matches = []
+    for index, line in enumerate(content.splitlines(), start=1):
+        for severity, key, pattern, hint in LOG_PATTERNS:
+            if pattern.search(line):
+                matches.append({
+                    "severity": severity,
+                    "key": key,
+                    "hint": hint,
+                    "line": index,
+                    "text": line.strip()[:500],
+                })
+                break
+    return {
+        "path": str(path),
+        "fileName": path.name,
+        "size": path.stat().st_size,
+        "truncated": truncated,
+        "matches": matches[:80],
+    }
+
+
+def diagnose_profile(ctx: DiagnosticContext, profile_id: str | None = None, include_logs: bool = True, max_log_bytes: int = MAX_LOG_BYTES) -> dict[str, Any]:
+    profile = find_profile(ctx, profile_id)
+    mods = [inspect_mod(str(path), profile) for path in list_profile_mod_paths(profile)]
+    logs = [analyze_log(path, max_log_bytes) for path in recent_log_paths(profile)] if include_logs else []
+    issue_count = sum(len(mod.get("issues", [])) for mod in mods) + sum(len(log.get("matches", [])) for log in logs)
+    warning_count = sum(len(mod.get("warnings", [])) for mod in mods)
+    status = "error" if issue_count else "warning" if warning_count else "ok"
+    return {
+        "status": status,
+        "profile": profile_brief(profile),
+        "summary": {
+            "mods": len(mods),
+            "issues": issue_count,
+            "warnings": warning_count,
+            "logsAnalyzed": len(logs),
+        },
+        "mods": mods,
+        "logs": logs,
+    }
+
+
+def list_profiles(ctx: DiagnosticContext) -> dict[str, Any]:
+    data = load_profiles(ctx)
+    return {
+        "dataDir": data["dataDir"],
+        "selectedProfileId": data["selectedProfileId"],
+        "profiles": [profile_brief(profile) for profile in data.get("profiles", [])],
+    }
+
+
+def json_dump(data: Any, pretty: bool = False) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2 if pretty else None)
+
+
+TOOLS = [
+    {
+        "name": "list_profiles",
+        "description": "List Power Mine launcher profiles from the local data directory.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+            },
+        },
+    },
+    {
+        "name": "diagnose_profile",
+        "description": "Inspect a Power Mine profile, its installed mods, and recent game logs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "profile_id": {"type": "string", "description": "Profile id. Defaults to the selected profile."},
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+                "include_logs": {"type": "boolean", "description": "Analyze recent logs and crash reports.", "default": True},
+                "max_log_bytes": {"type": "integer", "description": "Maximum bytes to read from each log.", "default": MAX_LOG_BYTES},
+            },
+        },
+    },
+    {
+        "name": "diagnose_mod",
+        "description": "Inspect a single Minecraft mod jar and optionally compare it with a Power Mine profile.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["jar_path"],
+            "properties": {
+                "jar_path": {"type": "string", "description": "Path to a .jar or .jar.disabled mod file."},
+                "profile_id": {"type": "string", "description": "Optional profile id for loader/version compatibility checks."},
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+            },
+        },
+    },
+]
+
+
+def read_mcp_message(stream: Any) -> dict[str, Any] | None:
+    first = stream.readline()
+    while first == b"\r\n" or first == b"\n":
+        first = stream.readline()
+    if not first:
+        return None
+    if first.lstrip().startswith(b"{"):
+        return json.loads(first.decode("utf-8"))
+
+    headers: dict[str, str] = {}
+    line = first
+    while line not in (b"\r\n", b"\n", b""):
+        name, _, value = line.decode("utf-8").partition(":")
+        headers[name.lower()] = value.strip()
+        line = stream.readline()
+    length = int(headers.get("content-length", "0"))
+    if length <= 0:
+        return None
+    return json.loads(stream.read(length).decode("utf-8"))
+
+
+def write_mcp_message(payload: dict[str, Any]) -> None:
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii"))
+    sys.stdout.buffer.write(raw)
+    sys.stdout.buffer.flush()
+
+
+def mcp_result(request_id: Any, result: Any) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def mcp_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    ctx = context_from_args(arguments.get("data_dir"))
+    if name == "list_profiles":
+        data = list_profiles(ctx)
+    elif name == "diagnose_profile":
+        data = diagnose_profile(
+            ctx,
+            arguments.get("profile_id"),
+            bool(arguments.get("include_logs", True)),
+            int(arguments.get("max_log_bytes", MAX_LOG_BYTES)),
+        )
+    elif name == "diagnose_mod":
+        profile = find_profile(ctx, arguments.get("profile_id")) if arguments.get("profile_id") else None
+        data = inspect_mod(arguments["jar_path"], profile)
+    else:
+        raise ValueError(f"unknown tool: {name}")
+    return {"content": [{"type": "text", "text": json_dump(data, pretty=True)}]}
+
+
+def run_mcp_server() -> int:
+    while True:
+        request = read_mcp_message(sys.stdin.buffer)
+        if request is None:
+            return 0
+        method = request.get("method")
+        request_id = request.get("id")
+        if method is None:
+            continue
+        try:
+            if method == "initialize":
+                protocol = (request.get("params") or {}).get("protocolVersion", "2024-11-05")
+                write_mcp_message(mcp_result(request_id, {
+                    "protocolVersion": protocol,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "power-mine", "version": "0.1.0"},
+                }))
+            elif method == "tools/list":
+                write_mcp_message(mcp_result(request_id, {"tools": TOOLS}))
+            elif method == "tools/call":
+                params = request.get("params") or {}
+                result = call_tool(params.get("name", ""), params.get("arguments") or {})
+                write_mcp_message(mcp_result(request_id, result))
+            elif method == "ping":
+                write_mcp_message(mcp_result(request_id, {}))
+            elif method.startswith("notifications/"):
+                continue
+            else:
+                write_mcp_message(mcp_error(request_id, -32601, f"method not found: {method}"))
+        except Exception as exc:
+            details = f"{exc}\n{traceback.format_exc(limit=5)}"
+            if request_id is not None:
+                write_mcp_message(mcp_result(request_id, {
+                    "content": [{"type": "text", "text": details}],
+                    "isError": True,
+                }))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Power Mine diagnostics for Codex")
+    parser.add_argument("--data-dir", help="Power Mine data directory")
+    parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("list-profiles", help="List launcher profiles")
+
+    diagnose_profile_parser = subparsers.add_parser("diagnose-profile", help="Diagnose a launcher profile")
+    diagnose_profile_parser.add_argument("profile_id", nargs="?", help="Profile id; defaults to selected profile")
+    diagnose_profile_parser.add_argument("--no-logs", action="store_true", help="Skip log analysis")
+    diagnose_profile_parser.add_argument("--max-log-bytes", type=int, default=MAX_LOG_BYTES)
+
+    diagnose_mod_parser = subparsers.add_parser("diagnose-mod", help="Diagnose a mod jar")
+    diagnose_mod_parser.add_argument("jar_path")
+    diagnose_mod_parser.add_argument("--profile-id", help="Compare against a launcher profile")
+
+    subparsers.add_parser("mcp", help="Run the MCP stdio server")
+
+    args = parser.parse_args(argv)
+    if args.command == "mcp":
+        return run_mcp_server()
+
+    ctx = context_from_args(args.data_dir)
+    if args.command == "list-profiles":
+        output = list_profiles(ctx)
+    elif args.command == "diagnose-profile":
+        output = diagnose_profile(ctx, args.profile_id, not args.no_logs, args.max_log_bytes)
+    elif args.command == "diagnose-mod":
+        profile = find_profile(ctx, args.profile_id) if args.profile_id else None
+        output = inspect_mod(args.jar_path, profile)
+    else:
+        parser.error(f"unknown command: {args.command}")
+    print(json_dump(output, pretty=args.pretty))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

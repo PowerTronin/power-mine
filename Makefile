@@ -1,6 +1,6 @@
-WAILS ?= /Users/zovchick/go/bin/wails
+WAILS ?= wails
 
-.PHONY: launch dev build test test-go test-frontend generate
+.PHONY: launch dev build appimage test test-go test-frontend generate
 
 launch:
 	./start-power-mine.sh
@@ -10,6 +10,9 @@ dev:
 
 build:
 	$(WAILS) build
+
+appimage:
+	WAILS="$(WAILS)" ./scripts/build-appimage.sh
 
 test: test-go test-frontend
 
