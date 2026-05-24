@@ -60,6 +60,8 @@ func runHeadless(ctx context.Context, args []string) int {
 
 	var result interface{}
 	switch command {
+	case "create-profile":
+		result, err = runHeadlessCreateProfile(app, remaining)
 	case "install-profile":
 		result, err = runHeadlessInstall(app, remaining, false)
 	case "repair-profile":
@@ -99,6 +101,49 @@ func parseHeadlessDataDir(args []string) (string, []string, error) {
 	return dataDir, remaining, nil
 }
 
+func runHeadlessCreateProfile(app *App, args []string) (domain.Profile, error) {
+	flags := flag.NewFlagSet("create-profile", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	name := flags.String("name", "", "profile name")
+	minecraftVersion := flags.String("minecraft-version", "1.20.1", "minecraft version")
+	loaderType := flags.String("loader", string(domain.LoaderFabric), "loader type")
+	loaderVersion := flags.String("loader-version", "latest", "loader version")
+	gameDir := flags.String("game-dir", "", "profile game directory")
+	minMemory := flags.Int("min-memory", 1024, "minimum memory in MB")
+	maxMemory := flags.Int("max-memory", 4096, "maximum memory in MB")
+	install := flags.Bool("install", false, "install the profile after creating it")
+	if err := flags.Parse(args); err != nil {
+		return domain.Profile{}, err
+	}
+	if strings.TrimSpace(*name) == "" && flags.NArg() > 0 {
+		*name = flags.Arg(0)
+	}
+	if strings.TrimSpace(*name) == "" {
+		return domain.Profile{}, fmt.Errorf("profile name is required")
+	}
+
+	profile, err := app.CreateProfile(domain.ProfileInput{
+		Name:             *name,
+		MinecraftVersion: *minecraftVersion,
+		Loader: domain.LoaderConfig{
+			Type:    domain.LoaderType(*loaderType),
+			Version: *loaderVersion,
+		},
+		GameDir: *gameDir,
+		Memory: domain.MemorySettings{
+			MinMB: *minMemory,
+			MaxMB: *maxMemory,
+		},
+	})
+	if err != nil {
+		return domain.Profile{}, err
+	}
+	if *install {
+		return app.installProfile(profile.ID, false)
+	}
+	return profile, nil
+}
+
 func runHeadlessInstall(app *App, args []string, repair bool) (domain.Profile, error) {
 	flags := flag.NewFlagSet("install-profile", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
@@ -119,6 +164,7 @@ func runHeadlessLaunch(ctx context.Context, app *App, args []string) (headlessLa
 	flags := flag.NewFlagSet("launch-profile", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	profileID := flags.String("profile-id", "", "profile id")
+	quickPlaySingleplayer := flags.String("quick-play-singleplayer", "", "singleplayer world name to open with Minecraft Quick Play")
 	if err := flags.Parse(args); err != nil {
 		return headlessLaunchResult{}, err
 	}
@@ -157,9 +203,10 @@ func runHeadlessLaunch(ctx context.Context, app *App, args []string) (headlessLa
 	}
 
 	commandSpec, err := app.minecraftService.BuildLaunchCommand(ctx, profile, minecraft.LaunchOptions{
-		JavaPath: javaPath,
-		Memory:   profile.Memory,
-		Account:  currentSettings.Account,
+		JavaPath:      javaPath,
+		Memory:        profile.Memory,
+		Account:       currentSettings.Account,
+		ExtraGameArgs: quickPlayArgs(*quickPlaySingleplayer),
 	})
 	if err != nil {
 		return headlessLaunchResult{}, err
@@ -173,6 +220,7 @@ func runHeadlessLaunch(ctx context.Context, app *App, args []string) (headlessLa
 
 	command := exec.Command(commandSpec.JavaPath, commandSpec.Args...)
 	command.Dir = commandSpec.WorkDir
+	command.Env = headlessLaunchEnv(os.Environ())
 	command.Stdout = logFile
 	command.Stderr = logFile
 	command.Stdin = nil
@@ -190,6 +238,14 @@ func runHeadlessLaunch(ctx context.Context, app *App, args []string) (headlessLa
 	}, nil
 }
 
+func quickPlayArgs(singleplayer string) []string {
+	singleplayer = strings.TrimSpace(singleplayer)
+	if singleplayer == "" {
+		return nil
+	}
+	return []string{"--quickPlaySingleplayer", singleplayer}
+}
+
 func headlessLaunchLog(profile domain.Profile) (string, *os.File, error) {
 	logsDir := filepath.Join(profile.GameDir, "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
@@ -201,6 +257,67 @@ func headlessLaunchLog(profile domain.Profile) (string, *os.File, error) {
 		return "", nil, err
 	}
 	return logPath, logFile, nil
+}
+
+func headlessLaunchEnv(base []string) []string {
+	env := envMap(base)
+	if strings.TrimSpace(env["XDG_RUNTIME_DIR"]) == "" {
+		runtimeDir := filepath.Join("/run/user", fmt.Sprint(os.Getuid()))
+		if info, err := os.Stat(runtimeDir); err == nil && info.IsDir() {
+			env["XDG_RUNTIME_DIR"] = runtimeDir
+		}
+	}
+	if strings.TrimSpace(env["DISPLAY"]) == "" {
+		if display := inferXDisplay(); display != "" {
+			env["DISPLAY"] = display
+		}
+	}
+	if strings.TrimSpace(env["XAUTHORITY"]) == "" && strings.TrimSpace(env["XDG_RUNTIME_DIR"]) != "" {
+		for _, candidate := range []string{
+			filepath.Join(env["XDG_RUNTIME_DIR"], "gdm", "Xauthority"),
+			filepath.Join(env["XDG_RUNTIME_DIR"], "Xauthority"),
+		} {
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				env["XAUTHORITY"] = candidate
+				break
+			}
+		}
+	}
+	return flattenEnv(env)
+}
+
+func envMap(values []string) map[string]string {
+	env := make(map[string]string, len(values))
+	for _, value := range values {
+		key, val, ok := strings.Cut(value, "=")
+		if ok && key != "" {
+			env[key] = val
+		}
+	}
+	return env
+}
+
+func flattenEnv(env map[string]string) []string {
+	values := make([]string, 0, len(env))
+	for key, value := range env {
+		values = append(values, key+"="+value)
+	}
+	return values
+}
+
+func inferXDisplay() string {
+	matches, err := filepath.Glob("/tmp/.X11-unix/X*")
+	if err != nil {
+		return ""
+	}
+	for _, match := range matches {
+		name := filepath.Base(match)
+		display := strings.TrimPrefix(name, "X")
+		if display != "" && display != name {
+			return ":" + display
+		}
+	}
+	return ""
 }
 
 func writeHeadless(ok bool, command string, result interface{}, message string) {

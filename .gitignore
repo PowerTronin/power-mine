@@ -2,6 +2,10 @@ build/bin
 build/appimage
 build/tools
 dist
+agent/.gradle
+agent/build
+practice-mod
+__pycache__
 node_modules
 frontend/node_modules
 frontend/dist

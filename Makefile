@@ -1,6 +1,6 @@
 WAILS ?= wails
 
-.PHONY: launch dev build appimage test test-go test-frontend generate
+.PHONY: launch dev build appimage agent test test-go test-frontend generate
 
 launch:
 	./start-power-mine.sh
@@ -13,6 +13,9 @@ build:
 
 appimage:
 	WAILS="$(WAILS)" ./scripts/build-appimage.sh
+
+agent:
+	./scripts/build-agent.sh
 
 test: test-go test-frontend
 

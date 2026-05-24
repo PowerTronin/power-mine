@@ -5,23 +5,58 @@
 It can:
 
 - list Power Mine profiles;
+- create launcher profiles through the headless launcher;
 - inspect Fabric, Quilt, Forge, and NeoForge mod jars;
 - compare mod metadata with a launcher profile;
-- scan recent logs, crash reports, and JVM error logs for common mod failures;
+- verify installed Fabric `depends`/`breaks` metadata, including nested Fabric API modules;
+- statically validate item/block models, textures, blockstates, and crafting recipe JSON in mod jars;
+- scan recent logs, crash reports, JVM error logs, or only files from the latest launcher run;
+- wait for launched-profile ready/crash signals from logs;
+- scaffold a minimal buildable Fabric mod project;
 - import, enable, disable, and delete profile mod jars;
 - call the launcher headless commands to install, repair, or launch a profile;
+- create and operate Vanilla, Fabric, Quilt, Forge, and NeoForge launcher profiles, including legacy Forge `1.7.10` installers;
+- build and install the experimental Fabric in-game agent for Minecraft `1.20.1`;
+- query the running agent for player/world state and inventory;
+- put an item stack into a hotbar/inventory slot before render checks;
+- ask the running client whether held items and placed blocks have baked render models;
+- capture a framebuffer screenshot to a PNG file for visual inspection;
+- ask Minecraft's `RecipeManager` whether a crafting grid really matches a recipe;
+- place or break blocks in a loaded integrated singleplayer world through the agent;
+- run one combined static/runtime smoke test that returns a structured pass/warn/fail report;
 - run as an MCP stdio server for Codex plugin use.
 
 Examples:
 
 ```bash
 python3 tools/codex/power_mine_mcp.py --pretty list-profiles
+python3 tools/codex/power_mine_mcp.py --pretty create-profile "Codex 1.20.1" --install
 python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile
+python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile --log-scope latest_run
+python3 tools/codex/power_mine_mcp.py --pretty wait-profile-ready <profile-id>
+python3 tools/codex/power_mine_mcp.py --pretty scaffold-fabric-mod ./example-mod example_mod
 python3 tools/codex/power_mine_mcp.py --pretty diagnose-mod ~/Downloads/example-mod.jar --profile-id <profile-id>
+python3 tools/codex/power_mine_mcp.py --pretty diagnose-mod-content ~/Downloads/example-mod.jar
 python3 tools/codex/power_mine_mcp.py --pretty import-mod ~/Downloads/example-mod.jar --profile-id <profile-id>
 python3 tools/codex/power_mine_mcp.py --pretty set-mod-enabled example-mod.jar --profile-id <profile-id> --no-enabled
+python3 tools/codex/power_mine_mcp.py --pretty build-agent
+python3 tools/codex/power_mine_mcp.py --pretty install-agent --profile-id <profile-id>
 python3 tools/codex/power_mine_mcp.py --pretty repair-profile <profile-id>
 python3 tools/codex/power_mine_mcp.py --pretty launch-profile <profile-id>
+python3 tools/codex/power_mine_mcp.py --pretty launch-profile <profile-id> --quick-play-singleplayer "Codex World"
+python3 tools/codex/power_mine_mcp.py --pretty agent-smoke-test <profile-id> --launch --quick-play-singleplayer "Codex World"
+python3 tools/codex/power_mine_mcp.py --pretty agent-smoke-test <profile-id> --jar-path ~/Downloads/example-mod.jar --give-item example_mod:sample_item --recipe-items minecraft:emerald --expected-output example_mod:sample_item --block example_mod:sample_block
+python3 tools/codex/power_mine_mcp.py --pretty agent-health
+python3 tools/codex/power_mine_mcp.py --pretty agent-state
+python3 tools/codex/power_mine_mcp.py --pretty agent-inventory
+python3 tools/codex/power_mine_mcp.py --pretty agent-give-item example_mod:sample_item --count 1 --slot 0
+python3 tools/codex/power_mine_mcp.py --pretty agent-held-item-render --hand main
+python3 tools/codex/power_mine_mcp.py --pretty agent-block-render --x 0 --y 64 --z 0
+python3 tools/codex/power_mine_mcp.py --pretty agent-screenshot
+python3 tools/codex/power_mine_mcp.py --pretty agent-recipe-check "minecraft:oak_log" --width 1 --height 1 --expected-output minecraft:oak_planks
+python3 tools/codex/power_mine_mcp.py --pretty agent-world-snapshot --radius 2
+python3 tools/codex/power_mine_mcp.py --pretty agent-place-block 0 64 0 --block minecraft:stone
+python3 tools/codex/power_mine_mcp.py --pretty agent-break-block 0 64 0
 python3 tools/codex/power_mine_mcp.py mcp
 ```
 
@@ -36,8 +71,34 @@ Headless profile install, repair, and launch use the Power Mine binary. The tool
 
 1. `POWER_MINE_BINARY`
 2. `build/bin/power-mine`
-3. `dist/power-mine-0.1.0-linux-x86_64.appimage`
-4. `go run .` from `POWER_MINE_REPO`
+3. `go run -tags desktop,production[,webkit2_41] .` from `POWER_MINE_REPO`
+4. `dist/power-mine-0.1.0-linux-x86_64.appimage`
+
+Set `POWER_MINE_GO_TAGS` to override the fallback Go build tags.
+
+## In-Game Agent
+
+Launcher profile automation is broader than runtime automation: headless install/repair/launch supports Forge and NeoForge, including legacy Forge `1.7.10`, but the in-game agent below is Fabric-only today.
+
+The Fabric agent is currently an MVP for Minecraft `1.20.1` Fabric profiles. Build it with:
+
+```bash
+make agent
+```
+
+Then install it into a profile:
+
+```bash
+python3 tools/codex/power_mine_mcp.py --pretty install-agent --profile-id <profile-id>
+```
+
+After launching the profile and loading a singleplayer world, the agent listens on `127.0.0.1:39276`.
+Set `POWER_MINE_AGENT_PORT` or JVM property `power.mine.agent.port` to change the port. Set
+`POWER_MINE_AGENT_TOKEN` or JVM property `power.mine.agent.token` to require `Authorization: Bearer <token>`.
+
+Block placement and breaking are deliberately limited to integrated singleplayer worlds. The launcher can pass
+`--quick-play-singleplayer` for an existing world, but the current MVP does not create a new world or drive the
+title-screen UI yet; it acts once a world is loaded.
 
 ## Local Codex Plugin
 
