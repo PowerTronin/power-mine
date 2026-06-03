@@ -360,6 +360,16 @@ def collect_data_namespaces(names: set[str]) -> set[str]:
     return namespaces
 
 
+def should_require_pack_resource(namespace: str, asset_namespaces: set[str]) -> bool:
+    """Return whether a referenced asset should be bundled in the inspected jar.
+
+    Vanilla assets are supplied by Minecraft itself, so a mod jar can validly
+    reference minecraft:block/stone or minecraft:iron_ingot without bundling
+    those resources.
+    """
+    return namespace != "minecraft" and namespace in asset_namespaces
+
+
 def inspect_model_file(
     path: str,
     data: dict[str, Any],
@@ -383,7 +393,7 @@ def inspect_model_file(
             if texture_id is None:
                 continue
             texture_path = texture_resource_path(texture_id)
-            if texture_id[0] in asset_namespaces and texture_path not in names:
+            if should_require_pack_resource(texture_id[0], asset_namespaces) and texture_path not in names:
                 issues.append(f"{path}: texture {key!r} is missing: {value}")
     elif textures is not None:
         warnings.append(f"{path}: textures must be an object")
@@ -414,7 +424,7 @@ def inspect_blockstate_file(path: str, data: dict[str, Any], names: set[str], as
         model_id = resource_id(model, namespace)
         if model_id is None:
             continue
-        if model_id[0] in asset_namespaces and model_resource_path(model_id) not in names:
+        if should_require_pack_resource(model_id[0], asset_namespaces) and model_resource_path(model_id) not in names:
             issues.append(f"{path}: blockstate model is missing: {model}")
     if not blockstate_model_values(data):
         warnings.append(f"{path}: no model references found")
@@ -471,7 +481,7 @@ def inspect_recipe_file(path: str, data: dict[str, Any], names: set[str], asset_
         summary["result"] = {"item": item_id, "count": count}
         parsed = resource_id(item_id, "minecraft")
         validate_recipe_identifiers(path, [item_id], issues, warnings)
-        if parsed and parsed[0] in asset_namespaces and item_model_resource_path(parsed) not in names:
+        if parsed and should_require_pack_resource(parsed[0], asset_namespaces) and item_model_resource_path(parsed) not in names:
             issues.append(f"{path}: result item has no item model: {item_id}")
 
     if recipe_type == "minecraft:crafting_shaped":
