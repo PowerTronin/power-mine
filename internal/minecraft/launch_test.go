@@ -78,8 +78,9 @@ func TestBuildVanillaLaunchCommand(t *testing.T) {
 		Memory:           domain.MemorySettings{MinMB: 1024, MaxMB: 2048},
 		Account:          domain.AccountConfig{Mode: domain.AccountOffline, OfflineName: "Player", OfflineUUID: "00000000-0000-3000-8000-000000000000"},
 	}, LaunchOptions{
-		JavaPath: "java",
-		Account:  domain.AccountConfig{Mode: domain.AccountOffline, OfflineName: "Player", OfflineUUID: "00000000-0000-3000-8000-000000000000"},
+		JavaPath:      "java",
+		Account:       domain.AccountConfig{Mode: domain.AccountOffline, OfflineName: "Player", OfflineUUID: "00000000-0000-3000-8000-000000000000"},
+		ExtraGameArgs: []string{"--quickPlaySingleplayer", "Codex World"},
 	})
 	if err != nil {
 		t.Fatalf("BuildVanillaLaunchCommand returned error: %v", err)
@@ -99,6 +100,9 @@ func TestBuildVanillaLaunchCommand(t *testing.T) {
 	}
 	if !strings.Contains(joined, "-Dlog4j.configurationFile=") {
 		t.Fatalf("args missing log4j config: %s", joined)
+	}
+	if !strings.Contains(joined, "--quickPlaySingleplayer Codex World") {
+		t.Fatalf("args missing extra game args: %s", joined)
 	}
 }
 
@@ -229,6 +233,75 @@ func TestBuildForgeLaunchCommandSkipsInheritedVanillaClientJar(t *testing.T) {
 	}
 	if !strings.Contains(joined, "bootstraplauncher-1.1.2.jar") {
 		t.Fatalf("classpath missing Forge launcher library: %s", joined)
+	}
+}
+
+func TestBuildLegacyForgeLaunchCommandIncludesInheritedVanillaClientJar(t *testing.T) {
+	dataDir := t.TempDir()
+	service := NewService(dataDir)
+	forgeVersionID := ForgeVersionID("1.7.10", "10.13.4.1614-1.7.10")
+	baseVersionDir := filepath.Join(dataDir, "minecraft", "versions", "1.7.10")
+	forgeVersionDir := filepath.Join(dataDir, "minecraft", "versions", forgeVersionID)
+	libraryDir := filepath.Join(dataDir, "minecraft", "libraries", "net", "minecraft", "launchwrapper", "1.12")
+	for _, dir := range []string{baseVersionDir, forgeVersionDir, libraryDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(baseVersionDir, "1.7.10.jar"), []byte("client"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(libraryDir, "launchwrapper-1.12.jar"), []byte("launchwrapper"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	metadata := `{
+		"id":"` + forgeVersionID + `",
+		"inheritsFrom":"1.7.10",
+		"type":"release",
+		"mainClass":"net.minecraft.launchwrapper.Launch",
+		"assets":"legacy",
+		"assetIndex":{"id":"legacy"},
+		"minecraftArguments":"--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userProperties ${user_properties} --userType ${user_type} --tweakClass cpw.mods.fml.common.launcher.FMLTweaker",
+		"libraries":[{
+			"name":"net.minecraft:launchwrapper:1.12",
+			"downloads":{"artifact":{"path":"net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar"}}
+		}]
+	}`
+	if err := os.WriteFile(filepath.Join(forgeVersionDir, forgeVersionID+".json"), []byte(metadata), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	command, err := service.BuildLaunchCommand(context.Background(), domain.Profile{
+		ID:               "profile",
+		Name:             "Legacy Forge",
+		MinecraftVersion: "1.7.10",
+		Loader:           domain.LoaderConfig{Type: domain.LoaderForge, Version: "10.13.4.1614-1.7.10"},
+		GameDir:          filepath.Join(dataDir, "instance"),
+		Memory:           domain.MemorySettings{MinMB: 512, MaxMB: 1024},
+	}, LaunchOptions{
+		JavaPath: "java",
+		Account:  domain.AccountConfig{Mode: domain.AccountOffline, OfflineName: "Player", OfflineUUID: "00000000-0000-3000-8000-000000000000"},
+	})
+	if err != nil {
+		t.Fatalf("BuildLaunchCommand returned error: %v", err)
+	}
+
+	joined := strings.Join(command.Args, " ")
+	if !strings.Contains(joined, filepath.Join(baseVersionDir, "1.7.10.jar")) {
+		t.Fatalf("legacy Forge classpath missing inherited vanilla client jar: %s", joined)
+	}
+	if !strings.Contains(joined, "launchwrapper-1.12.jar") {
+		t.Fatalf("classpath missing LaunchWrapper library: %s", joined)
+	}
+	if !strings.Contains(joined, "--tweakClass cpw.mods.fml.common.launcher.FMLTweaker") {
+		t.Fatalf("legacy Forge args missing tweak class: %s", joined)
+	}
+	if strings.Contains(joined, "${user_properties}") {
+		t.Fatalf("legacy Forge args contain unresolved user_properties placeholder: %s", joined)
+	}
+	if !strings.Contains(joined, "--userProperties {}") {
+		t.Fatalf("legacy Forge args missing userProperties fallback: %s", joined)
 	}
 }
 

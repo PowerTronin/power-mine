@@ -1,6 +1,8 @@
 package minecraft
 
 import (
+	"archive/zip"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -104,6 +106,45 @@ func TestForgeVersionID(t *testing.T) {
 	}
 }
 
+func TestReadLegacyForgeInstallerProfileUsesVersionInfo(t *testing.T) {
+	installerPath := filepath.Join(t.TempDir(), "forge-1.7.10-installer.jar")
+	writeTestZip(t, installerPath, map[string]string{
+		"install_profile.json": `{
+			"install":{"minecraft":"1.7.10"},
+			"versionInfo":{
+				"id":"1.7.10-Forge10.13.4.1614-1.7.10",
+				"type":"release",
+				"mainClass":"net.minecraft.launchwrapper.Launch",
+				"minecraftArguments":"--username ${auth_player_name} --userProperties ${user_properties} --tweakClass cpw.mods.fml.common.launcher.FMLTweaker",
+				"libraries":[
+					{"name":"net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10","url":"https://maven.minecraftforge.net/"},
+					{"name":"net.minecraft:launchwrapper:1.12"}
+				]
+			}
+		}`,
+	})
+
+	version, installProfile, err := readForgeInstallerProfile(installerPath)
+	if err != nil {
+		t.Fatalf("readForgeInstallerProfile returned error: %v", err)
+	}
+	if version.ID != "1.7.10-Forge10.13.4.1614-1.7.10" {
+		t.Fatalf("version id = %q", version.ID)
+	}
+	if version.MainClass != "net.minecraft.launchwrapper.Launch" {
+		t.Fatalf("main class = %q", version.MainClass)
+	}
+	if !strings.Contains(version.MinecraftArguments, "FMLTweaker") {
+		t.Fatalf("minecraftArguments missing tweak class: %q", version.MinecraftArguments)
+	}
+	if len(version.Libraries) != 2 {
+		t.Fatalf("legacy version libraries = %d, want 2", len(version.Libraries))
+	}
+	if installProfile.VersionInfo.ID != version.ID {
+		t.Fatalf("install profile versionInfo id = %q, want %q", installProfile.VersionInfo.ID, version.ID)
+	}
+}
+
 func TestNeoForgeVersionID(t *testing.T) {
 	if got := NeoForgeVersionID("1.21.1", "21.1.207"); got != "1.21.1-neoforge-21.1.207" {
 		t.Fatalf("NeoForgeVersionID version = %q", got)
@@ -152,5 +193,46 @@ func TestNormalizeLibraryDownloads(t *testing.T) {
 	}
 	if artifact.SHA1 != "abc123" || artifact.Size != 42 {
 		t.Fatalf("artifact verification = %#v", artifact)
+	}
+
+	fallbacks := []libraryMetadata{
+		{
+			Name:      "net.minecraft:launchwrapper:1.12",
+			Checksums: []string{"sha-from-list"},
+		},
+		{
+			Name: "net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10",
+		},
+	}
+	normalizeLibraryDownloads(fallbacks)
+	if got := fallbacks[0].Downloads.Artifact.URL; got != "https://libraries.minecraft.net/net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar" {
+		t.Fatalf("default Mojang library URL = %q", got)
+	}
+	if got := fallbacks[0].Downloads.Artifact.SHA1; got != "sha-from-list" {
+		t.Fatalf("checksum fallback = %q", got)
+	}
+	if got := fallbacks[1].Downloads.Artifact.URL; got != "https://maven.minecraftforge.net/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10.jar" {
+		t.Fatalf("default Forge library URL = %q", got)
+	}
+}
+
+func writeTestZip(t *testing.T, path string, files map[string]string) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	writer := zip.NewWriter(file)
+	defer writer.Close()
+	for name, content := range files {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

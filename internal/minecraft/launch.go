@@ -17,9 +17,10 @@ import (
 )
 
 type LaunchOptions struct {
-	JavaPath string
-	Memory   domain.MemorySettings
-	Account  domain.AccountConfig
+	JavaPath      string
+	Memory        domain.MemorySettings
+	Account       domain.AccountConfig
+	ExtraGameArgs []string
 }
 
 type LaunchCommand struct {
@@ -94,6 +95,7 @@ func (s *Service) BuildLaunchCommand(ctx context.Context, profile domain.Profile
 	if len(gameArgs) == 0 && version.MinecraftArguments != "" {
 		gameArgs = resolvePlaceholders(strings.Fields(version.MinecraftArguments), vars)
 	}
+	gameArgs = append(gameArgs, options.ExtraGameArgs...)
 
 	args := make([]string, 0, len(jvmArgs)+1+len(gameArgs))
 	args = append(args, jvmArgs...)
@@ -183,7 +185,7 @@ func (s *Service) classpath(version versionMetadata, loader domain.LoaderType) (
 		addEntry(path)
 	}
 
-	if loader != domain.LoaderForge && loader != domain.LoaderNeoForge {
+	if loader != domain.LoaderForge && loader != domain.LoaderNeoForge || legacyForgeLaunchNeedsClientJar(version) {
 		clientVersionID := version.ID
 		if version.InheritsFrom != "" {
 			clientVersionID = version.InheritsFrom
@@ -195,6 +197,12 @@ func (s *Service) classpath(version versionMetadata, loader domain.LoaderType) (
 		addEntry(clientJar)
 	}
 	return strings.Join(entries, string(os.PathListSeparator)), nil
+}
+
+func legacyForgeLaunchNeedsClientJar(version versionMetadata) bool {
+	return version.InheritsFrom != "" &&
+		version.MinecraftArguments != "" &&
+		strings.Contains(strings.ToLower(version.MainClass), "launchwrapper")
 }
 
 func (s *Service) launchVersionID(profile domain.Profile) string {
@@ -233,6 +241,8 @@ func (s *Service) launchVariables(profile domain.Profile, version versionMetadat
 		"auth_access_token":   "0",
 		"auth_session":        "0",
 		"user_type":           "legacy",
+		"user_properties":     "{}",
+		"profile_properties":  "{}",
 		"version_name":        version.ID,
 		"version_type":        version.Type,
 		"game_directory":      profile.GameDir,

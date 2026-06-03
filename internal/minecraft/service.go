@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,10 +20,14 @@ import (
 )
 
 const (
-	versionManifestURL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
-	resourcesURL       = "https://resources.download.minecraft.net"
-	fabricMetaURL      = "https://meta.fabricmc.net/v2/versions/loader"
-	quiltMetaURL       = "https://meta.quiltmc.org/v3/versions/loader"
+	versionManifestURL    = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+	resourcesURL          = "https://resources.download.minecraft.net"
+	minecraftLibrariesURL = "https://libraries.minecraft.net"
+	fabricMetaURL         = "https://meta.fabricmc.net/v2/versions/loader"
+	quiltMetaURL          = "https://meta.quiltmc.org/v3/versions/loader"
+	downloadTimeout       = 2 * time.Minute
+	downloadAttempts      = 3
+	downloadRetryDelay    = 750 * time.Millisecond
 )
 
 type ProgressFunc func(domain.InstallProgress)
@@ -35,7 +40,16 @@ type Service struct {
 func NewService(dataDir string) *Service {
 	return &Service{
 		dataDir: dataDir,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		client:  minecraftHTTPClient(),
+	}
+}
+
+func minecraftHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSHandshakeTimeout = 30 * time.Second
+	return &http.Client{
+		Timeout:   downloadTimeout,
+		Transport: transport,
 	}
 }
 
@@ -636,16 +650,22 @@ func (s *Service) materializeAssets(targetRoot string, index assetIndex) error {
 }
 
 func (s *Service) ensureDownload(ctx context.Context, item downloadItem) error {
-	if valid, err := validFile(item.Path, item); err != nil {
-		return err
-	} else if valid {
-		return nil
-	}
+	return retryNetwork(ctx, func() error {
+		if valid, err := validFile(item.Path, item); err != nil {
+			return err
+		} else if valid {
+			return nil
+		}
 
-	if item.RawSet {
-		return writeVerified(item.Path, item.Raw, item)
-	}
+		if item.RawSet {
+			return writeVerified(item.Path, item.Raw, item)
+		}
 
+		return s.downloadItem(ctx, item)
+	})
+}
+
+func (s *Service) downloadItem(ctx context.Context, item downloadItem) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, item.URL, nil)
 	if err != nil {
 		return err
@@ -659,7 +679,7 @@ func (s *Service) ensureDownload(ctx context.Context, item downloadItem) error {
 	defer response.Body.Close()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("download request failed: %s", response.Status)
+		return httpStatusError{Prefix: "download request failed", Status: response.Status, StatusCode: response.StatusCode}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(item.Path), 0o755); err != nil {
@@ -697,6 +717,16 @@ func (s *Service) ensureDownload(ctx context.Context, item downloadItem) error {
 }
 
 func (s *Service) getRaw(ctx context.Context, url string) ([]byte, error) {
+	var raw []byte
+	err := retryNetwork(ctx, func() error {
+		var err error
+		raw, err = s.getRawOnce(ctx, url)
+		return err
+	})
+	return raw, err
+}
+
+func (s *Service) getRawOnce(ctx context.Context, url string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -711,9 +741,59 @@ func (s *Service) getRaw(ctx context.Context, url string) ([]byte, error) {
 	defer response.Body.Close()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("metadata request failed: %s", response.Status)
+		return nil, httpStatusError{Prefix: "metadata request failed", Status: response.Status, StatusCode: response.StatusCode}
 	}
 	return io.ReadAll(response.Body)
+}
+
+func retryNetwork(ctx context.Context, fn func() error) error {
+	var lastErr error
+	for attempt := 1; attempt <= downloadAttempts; attempt++ {
+		if err := fn(); err != nil {
+			lastErr = err
+			if !retryableNetworkError(err) || attempt == downloadAttempts {
+				return err
+			}
+			if waitErr := waitNetworkRetry(ctx, attempt); waitErr != nil {
+				return waitErr
+			}
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+func retryableNetworkError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var statusErr httpStatusError
+	if errors.As(err, &statusErr) && statusErr.StatusCode >= http.StatusBadRequest && statusErr.StatusCode < http.StatusInternalServerError {
+		return false
+	}
+	return true
+}
+
+func waitNetworkRetry(ctx context.Context, attempt int) error {
+	timer := time.NewTimer(time.Duration(attempt) * downloadRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type httpStatusError struct {
+	Prefix     string
+	Status     string
+	StatusCode int
+}
+
+func (e httpStatusError) Error() string {
+	return e.Prefix + ": " + e.Status
 }
 
 func writeVerified(path string, raw []byte, item downloadItem) error {
@@ -852,24 +932,53 @@ func mergeFabricProfile(base versionMetadata, fabric versionMetadata, versionID 
 	if len(fabric.Arguments.Game) > 0 {
 		merged.Arguments.Game = append(append([]json.RawMessage{}, base.Arguments.Game...), fabric.Arguments.Game...)
 	}
+	if fabric.MinecraftArguments != "" {
+		merged.MinecraftArguments = fabric.MinecraftArguments
+	}
 	return merged
 }
 
 func normalizeLibraryDownloads(libraries []libraryMetadata) {
 	for index := range libraries {
-		if libraries[index].Downloads.Artifact.Path != "" || libraries[index].URL == "" {
+		if libraries[index].Downloads.Artifact.Path != "" {
 			continue
 		}
 		path, ok := mavenArtifactPath(libraries[index].Name)
 		if !ok {
 			continue
 		}
+		baseURL := strings.TrimSpace(libraries[index].URL)
+		if baseURL == "" {
+			baseURL = defaultLibraryBaseURL(libraries[index].Name)
+		}
+		if baseURL == "" {
+			continue
+		}
+		sha1 := libraries[index].SHA1
+		if sha1 == "" && len(libraries[index].Checksums) > 0 {
+			sha1 = libraries[index].Checksums[0]
+		}
 		libraries[index].Downloads.Artifact = artifact{
 			Path: path,
-			URL:  strings.TrimRight(libraries[index].URL, "/") + "/" + path,
-			SHA1: libraries[index].SHA1,
+			URL:  strings.TrimRight(baseURL, "/") + "/" + path,
+			SHA1: sha1,
 			Size: libraries[index].Size,
 		}
+	}
+}
+
+func defaultLibraryBaseURL(name string) string {
+	group, _, ok := strings.Cut(strings.TrimSpace(name), ":")
+	if !ok || group == "" {
+		return ""
+	}
+	switch group {
+	case "net.minecraftforge":
+		return forgeMavenBaseURL
+	case "net.neoforged":
+		return neoForgeMavenBaseURL
+	default:
+		return minecraftLibrariesURL
 	}
 }
 
@@ -992,10 +1101,11 @@ type launchArguments struct {
 }
 
 type libraryMetadata struct {
-	Name      string `json:"name"`
-	URL       string `json:"url,omitempty"`
-	SHA1      string `json:"sha1,omitempty"`
-	Size      int64  `json:"size,omitempty"`
+	Name      string   `json:"name"`
+	URL       string   `json:"url,omitempty"`
+	SHA1      string   `json:"sha1,omitempty"`
+	Checksums []string `json:"checksums,omitempty"`
+	Size      int64    `json:"size,omitempty"`
 	Downloads struct {
 		Artifact    artifact            `json:"artifact"`
 		Classifiers map[string]artifact `json:"classifiers"`

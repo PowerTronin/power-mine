@@ -72,11 +72,12 @@ type forgeMetadata struct {
 }
 
 type forgeInstallProfile struct {
-	Version    string                    `json:"version"`
-	Minecraft  string                    `json:"minecraft"`
-	Data       map[string]forgeDataValue `json:"data"`
-	Processors []forgeProcessor          `json:"processors"`
-	Libraries  []libraryMetadata         `json:"libraries"`
+	Version     string                    `json:"version"`
+	Minecraft   string                    `json:"minecraft"`
+	VersionInfo versionMetadata           `json:"versionInfo"`
+	Data        map[string]forgeDataValue `json:"data"`
+	Processors  []forgeProcessor          `json:"processors"`
+	Libraries   []libraryMetadata         `json:"libraries"`
 }
 
 type forgeDataValue struct {
@@ -267,22 +268,26 @@ func readForgeInstallerProfile(installerPath string) (versionMetadata, forgeInst
 	}
 	defer reader.Close()
 
-	versionRaw, err := readZipEntry(reader.File, "version.json")
-	if err != nil {
-		return versionMetadata{}, forgeInstallProfile{}, err
-	}
 	installRaw, err := readZipEntry(reader.File, "install_profile.json")
 	if err != nil {
 		return versionMetadata{}, forgeInstallProfile{}, err
 	}
 
-	var version versionMetadata
-	if err := json.Unmarshal(versionRaw, &version); err != nil {
-		return versionMetadata{}, forgeInstallProfile{}, err
-	}
 	var installProfile forgeInstallProfile
 	if err := json.Unmarshal(installRaw, &installProfile); err != nil {
 		return versionMetadata{}, forgeInstallProfile{}, err
+	}
+
+	var version versionMetadata
+	versionRaw, versionErr := readZipEntry(reader.File, "version.json")
+	if versionErr == nil {
+		if err := json.Unmarshal(versionRaw, &version); err != nil {
+			return versionMetadata{}, forgeInstallProfile{}, err
+		}
+	} else if installProfile.VersionInfo.ID != "" {
+		version = installProfile.VersionInfo
+	} else {
+		return versionMetadata{}, forgeInstallProfile{}, versionErr
 	}
 	return version, installProfile, nil
 }
