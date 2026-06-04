@@ -83,10 +83,13 @@ Useful commands:
 - `make appimage` creates `dist/power-mine-<version>-linux-<arch>.appimage`.
 - `make agent` builds the Fabric in-game Codex agent at `agent/build/libs/power-mine-agent-0.1.0.jar`.
 - `python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile` runs headless mod diagnostics for Codex/local automation.
+- `python3 tools/codex/power_mine_mcp.py --pretty install-java 8` installs the managed Java 8 runtime used by legacy Minecraft and Forge profiles.
 - `python3 tools/codex/power_mine_mcp.py --pretty install-agent --profile-id <profile-id>` installs the built agent into a Fabric `1.20.1` profile.
 - `python3 tools/codex/power_mine_mcp.py --pretty launch-profile <profile-id> --quick-play-singleplayer "World Name"` launches Minecraft and asks Quick Play to open an existing singleplayer world.
 - `python3 tools/codex/power_mine_mcp.py --pretty agent-smoke-test <profile-id> --launch --quick-play-singleplayer "World Name"` runs the combined Codex runtime smoke test.
 - `./build/bin/power-mine headless repair-profile <profile-id>` repairs a profile without opening the GUI.
+
+Forge and NeoForge profile installation automatically prepares the required managed Java runtime when it is missing. Legacy Minecraft versions such as `1.7.10` require Java 8, so the first install may download Temurin 8 before running the Forge installer.
 
 On Ubuntu 24.04 or another distro that provides WebKitGTK 4.1 instead of 4.0, install `libwebkit2gtk-4.1-dev`; `make appimage` will automatically pass the Wails build tag `webkit2_41` when that package is detected.
 

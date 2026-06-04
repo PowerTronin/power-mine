@@ -74,10 +74,16 @@ type forgeMetadata struct {
 type forgeInstallProfile struct {
 	Version     string                    `json:"version"`
 	Minecraft   string                    `json:"minecraft"`
+	Install     forgeInstallerInstall     `json:"install"`
 	VersionInfo versionMetadata           `json:"versionInfo"`
 	Data        map[string]forgeDataValue `json:"data"`
 	Processors  []forgeProcessor          `json:"processors"`
 	Libraries   []libraryMetadata         `json:"libraries"`
+}
+
+type forgeInstallerInstall struct {
+	Path     string `json:"path"`
+	FilePath string `json:"filePath"`
 }
 
 type forgeDataValue struct {
@@ -154,13 +160,13 @@ func (s *Service) installForgeLikeLoader(ctx context.Context, profile domain.Pro
 
 	normalizeLibraryDownloads(forge.Libraries)
 	normalizeLibraryDownloads(installProfile.Libraries)
+	if err := s.extractForgeInstallerData(installerPath, loaderVersion, installProfile, provider); err != nil {
+		return "", err
+	}
 	if err := s.ensureForgeLibraries(ctx, append(append([]libraryMetadata{}, installProfile.Libraries...), forge.Libraries...), emit, provider); err != nil {
 		return "", err
 	}
 	if err := s.ensureForgeProcessorArtifacts(ctx, installProfile, provider); err != nil {
-		return "", err
-	}
-	if err := s.extractForgeInstallerData(installerPath, loaderVersion, installProfile, provider); err != nil {
 		return "", err
 	}
 	if err := s.runForgeClientProcessors(ctx, javaPath, installerPath, loaderVersion, profile, installProfile, emit, provider); err != nil {
@@ -356,6 +362,25 @@ func (s *Service) extractForgeInstallerData(installerPath string, loaderVersion 
 		return err
 	}
 	defer reader.Close()
+
+	if installProfile.Install.Path != "" && installProfile.Install.FilePath != "" {
+		targetPath, ok := mavenArtifactPathFromSpec(installProfile.Install.Path)
+		if !ok {
+			return fmt.Errorf("invalid Forge install artifact path %q", installProfile.Install.Path)
+		}
+		sourcePath := filepath.Clean(filepath.FromSlash(installProfile.Install.FilePath))
+		if !filepath.IsLocal(sourcePath) {
+			return fmt.Errorf("invalid Forge install file path %q", installProfile.Install.FilePath)
+		}
+		target := filepath.Join(s.minecraftDir(), "libraries", filepath.FromSlash(targetPath))
+		if valid, err := validFile(target, downloadItem{}); err != nil {
+			return err
+		} else if !valid {
+			if err := extractZipEntry(reader.File, filepath.ToSlash(sourcePath), target); err != nil {
+				return err
+			}
+		}
+	}
 
 	for _, data := range installProfile.Data {
 		value := data.Client

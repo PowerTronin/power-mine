@@ -1286,6 +1286,10 @@ def create_profile(
     return run_power_mine_headless_args(ctx, "create-profile", args)
 
 
+def install_java_runtime(ctx: DiagnosticContext, version: int = 21) -> dict[str, Any]:
+    return run_power_mine_headless_args(ctx, "install-java", ["--version", str(version)])
+
+
 def run_power_mine_headless(ctx: DiagnosticContext, command: str, profile_id: str | None) -> dict[str, Any]:
     profile = find_profile(ctx, profile_id)
     return run_power_mine_headless_args(ctx, command, ["--profile-id", profile["id"]])
@@ -2432,6 +2436,17 @@ TOOLS = [
         },
     },
     {
+        "name": "install_java_runtime",
+        "description": "Install a managed Eclipse Temurin Java runtime through the launcher headless command.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "version": {"type": "integer", "description": "Java major version.", "default": 21},
+                "data_dir": {"type": "string", "description": "Optional Power Mine data directory."},
+            },
+        },
+    },
+    {
         "name": "scaffold_fabric_mod",
         "description": "Create a minimal buildable Fabric mod project for Codex-driven testing.",
         "inputSchema": {
@@ -2874,6 +2889,8 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     elif name == "diagnose_mod":
         profile = find_profile(ctx, arguments.get("profile_id")) if arguments.get("profile_id") else None
         data = inspect_mod(arguments["jar_path"], profile)
+    elif name == "install_java_runtime":
+        data = install_java_runtime(ctx, int(arguments.get("version", 21)))
     elif name == "diagnose_mod_content":
         data = diagnose_mod_content(arguments["jar_path"])
     elif name == "import_profile_mod":
@@ -3118,6 +3135,9 @@ def main(argv: list[str] | None = None) -> int:
     create_profile_parser.add_argument("--max-memory", type=int, default=4096)
     create_profile_parser.add_argument("--install", action="store_true")
 
+    install_java_parser = subparsers.add_parser("install-java", help="Install a managed Java runtime")
+    install_java_parser.add_argument("version", nargs="?", type=int, default=21, help="Java major version")
+
     scaffold_parser = subparsers.add_parser("scaffold-fabric-mod", help="Create a minimal Fabric mod project")
     scaffold_parser.add_argument("project_dir")
     scaffold_parser.add_argument("mod_id")
@@ -3282,6 +3302,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.max_memory,
                 args.install,
             )
+        elif args.command == "install-java":
+            output = install_java_runtime(ctx, args.version)
         elif args.command == "scaffold-fabric-mod":
             output = scaffold_fabric_mod(
                 args.project_dir,
