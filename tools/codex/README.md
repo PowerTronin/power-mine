@@ -34,6 +34,7 @@ python3 tools/codex/power_mine_mcp.py --pretty create-profile "Codex 1.20.1" --i
 python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile
 python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile --log-scope latest_run
 python3 tools/codex/power_mine_mcp.py --pretty wait-profile-ready <profile-id>
+python3 tools/codex/power_mine_mcp.py --pretty install-java 8
 python3 tools/codex/power_mine_mcp.py --pretty scaffold-fabric-mod ./example-mod example_mod
 python3 tools/codex/power_mine_mcp.py --pretty diagnose-mod ~/Downloads/example-mod.jar --profile-id <profile-id>
 python3 tools/codex/power_mine_mcp.py --pretty diagnose-mod-content ~/Downloads/example-mod.jar

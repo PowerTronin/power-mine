@@ -145,6 +145,51 @@ func TestReadLegacyForgeInstallerProfileUsesVersionInfo(t *testing.T) {
 	}
 }
 
+func TestExtractLegacyForgeInstallArtifact(t *testing.T) {
+	tempDir := t.TempDir()
+	installerPath := filepath.Join(tempDir, "forge-1.7.10-installer.jar")
+	writeTestZip(t, installerPath, map[string]string{
+		"forge-1.7.10-10.13.4.1614-1.7.10-universal.jar": "legacy-forge-universal",
+		"install_profile.json": `{
+			"install":{
+				"path":"net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10",
+				"filePath":"forge-1.7.10-10.13.4.1614-1.7.10-universal.jar"
+			},
+			"versionInfo":{
+				"id":"1.7.10-Forge10.13.4.1614-1.7.10",
+				"mainClass":"net.minecraft.launchwrapper.Launch"
+			}
+		}`,
+	})
+
+	_, installProfile, err := readForgeInstallerProfile(installerPath)
+	if err != nil {
+		t.Fatalf("readForgeInstallerProfile returned error: %v", err)
+	}
+
+	service := NewService(tempDir)
+	if err := service.extractForgeInstallerData(installerPath, "1.7.10-10.13.4.1614-1.7.10", installProfile, forgeInstallerProvider); err != nil {
+		t.Fatalf("extractForgeInstallerData returned error: %v", err)
+	}
+
+	target := filepath.Join(
+		service.minecraftDir(),
+		"libraries",
+		"net",
+		"minecraftforge",
+		"forge",
+		"1.7.10-10.13.4.1614-1.7.10",
+		"forge-1.7.10-10.13.4.1614-1.7.10.jar",
+	)
+	raw, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("expected extracted legacy Forge artifact: %v", err)
+	}
+	if string(raw) != "legacy-forge-universal" {
+		t.Fatalf("legacy Forge artifact content = %q", string(raw))
+	}
+}
+
 func TestNeoForgeVersionID(t *testing.T) {
 	if got := NeoForgeVersionID("1.21.1", "21.1.207"); got != "1.21.1-neoforge-21.1.207" {
 		t.Fatalf("NeoForgeVersionID version = %q", got)

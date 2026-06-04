@@ -1767,7 +1767,7 @@ func (a *App) installProfile(id string, repair bool) (domain.Profile, error) {
 		if settingsErr != nil {
 			return domain.Profile{}, settingsErr
 		}
-		javaPath, _, javaErr := a.javaPathForProfile(profile, currentSettings.JavaPath)
+		javaPath, _, javaErr := a.ensureProfileJavaRuntime(profile, currentSettings.JavaPath)
 		if javaErr != nil {
 			message := loaderName + " install failed"
 			if repair {
@@ -1948,6 +1948,47 @@ func (a *App) javaPathForProfile(profile domain.Profile, fallbackPath string) (s
 		return runtime.JavaPath, runtime.RequiredMajor, nil
 	}
 	return "", runtime.RequiredMajor, fmt.Errorf("minecraft %s requires Java %d; install Java %d from Library", profile.MinecraftVersion, runtime.RequiredMajor, runtime.RequiredMajor)
+}
+
+func (a *App) ensureProfileJavaRuntime(profile domain.Profile, fallbackPath string) (string, int, error) {
+	runtime, err := a.profileJavaRuntime(profile, fallbackPath)
+	if err != nil {
+		return "", 0, err
+	}
+	if runtime.Installed {
+		return runtime.JavaPath, runtime.RequiredMajor, nil
+	}
+	if runtime.RequiredMajor <= 0 {
+		return "", 0, fmt.Errorf("minecraft %s has no resolvable Java runtime requirement", profile.MinecraftVersion)
+	}
+
+	a.emitInstallProgress(domain.InstallProgress{
+		ProfileID: profile.ID,
+		Stage:     "java-runtime",
+		Message:   fmt.Sprintf("Installing Java %d runtime", runtime.RequiredMajor),
+		Percent:   80,
+	})
+
+	javaPath, err := a.javaService.InstallTemurin(a.ctx, runtime.RequiredMajor, a.emitJavaProgress)
+	if err != nil {
+		return "", runtime.RequiredMajor, err
+	}
+
+	status := a.javaService.Validate(a.ctx, javaPath)
+	if !status.OK {
+		return "", runtime.RequiredMajor, errors.New(status.Message)
+	}
+	if !javasvc.CompatibleMajor(javasvc.MajorVersion(status.Version), runtime.RequiredMajor) {
+		return "", runtime.RequiredMajor, fmt.Errorf("minecraft %s requires Java %d; installed runtime is Java %s", profile.MinecraftVersion, runtime.RequiredMajor, status.Version)
+	}
+
+	a.emitInstallProgress(domain.InstallProgress{
+		ProfileID: profile.ID,
+		Stage:     "java-runtime",
+		Message:   fmt.Sprintf("Java %d runtime installed", runtime.RequiredMajor),
+		Percent:   81,
+	})
+	return javaPath, runtime.RequiredMajor, nil
 }
 
 func (a *App) profileJavaRuntime(profile domain.Profile, fallbackPath string) (domain.ProfileJavaRuntime, error) {

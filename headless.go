@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +63,8 @@ func runHeadless(ctx context.Context, args []string) int {
 	switch command {
 	case "create-profile":
 		result, err = runHeadlessCreateProfile(app, remaining)
+	case "install-java":
+		result, err = runHeadlessInstallJava(app, remaining)
 	case "install-profile":
 		result, err = runHeadlessInstall(app, remaining, false)
 	case "repair-profile":
@@ -142,6 +145,26 @@ func runHeadlessCreateProfile(app *App, args []string) (domain.Profile, error) {
 		return app.installProfile(profile.ID, false)
 	}
 	return profile, nil
+}
+
+func runHeadlessInstallJava(app *App, args []string) (domain.JavaStatus, error) {
+	flags := flag.NewFlagSet("install-java", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	version := flags.Int("version", 21, "Java major version")
+	if err := flags.Parse(args); err != nil {
+		return domain.JavaStatus{}, err
+	}
+	if flags.NArg() > 0 {
+		parsed, err := strconv.Atoi(flags.Arg(0))
+		if err != nil {
+			return domain.JavaStatus{}, fmt.Errorf("invalid Java version %q", flags.Arg(0))
+		}
+		*version = parsed
+	}
+	if *version <= 0 {
+		return domain.JavaStatus{}, fmt.Errorf("Java version must be positive")
+	}
+	return app.InstallJava(*version)
 }
 
 func runHeadlessInstall(app *App, args []string, repair bool) (domain.Profile, error) {
