@@ -943,6 +943,9 @@ func normalizeLibraryDownloads(libraries []libraryMetadata) {
 		if libraries[index].Downloads.Artifact.Path != "" {
 			continue
 		}
+		if _, ok := nativeClassifier(libraries[index]); ok && len(libraries[index].Downloads.Classifiers) > 0 {
+			continue
+		}
 		path, ok := mavenArtifactPath(libraries[index].Name)
 		if !ok {
 			continue

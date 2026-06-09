@@ -4,6 +4,7 @@ build/tools
 dist
 agent/.gradle
 agent/build
+forge-agent/build
 practice-mod
 __pycache__
 node_modules
