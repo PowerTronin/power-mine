@@ -141,19 +141,19 @@ The local Codex plugin installed on this machine is `power-mine@personal`.
 Source plugin path:
 
 ```text
-/home/amd-btw/plugins/power-mine
+~/plugins/power-mine
 ```
 
 Installed cache path:
 
 ```text
-/home/amd-btw/.codex/plugins/cache/personal/power-mine/<installed-version>
+~/.codex/plugins/cache/personal/power-mine/<installed-version>
 ```
 
 After changing the MCP script or plugin metadata, validate and reinstall:
 
 ```bash
-python3 /home/amd-btw/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /home/amd-btw/plugins/power-mine
+python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ~/plugins/power-mine
 codex plugin add power-mine@personal
 ```
 
