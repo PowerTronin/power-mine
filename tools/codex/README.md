@@ -26,6 +26,7 @@ It can:
 - use/right-click held items and block positions through the running agent;
 - run structured item/block interaction checks with optional expectations for used result, screen open, stack changes, block changes, or any observed effect;
 - ask a capable running client whether held items and placed blocks have baked render models or screenshot visual-probe evidence;
+- rotate the running client camera/head toward coordinates or explicit yaw/pitch;
 - capture a framebuffer screenshot to a PNG file for visual inspection when the agent supports it;
 - ask the running Minecraft client whether a crafting grid really matches a recipe when the agent supports it;
 - ask the running agent to perform a recipe craft by consuming player inventory inputs and inserting the output stack;
@@ -76,6 +77,7 @@ python3 tools/codex/power_mine_mcp.py --pretty agent-interaction-check item --it
 python3 tools/codex/power_mine_mcp.py --pretty agent-held-item-render --hand main
 python3 tools/codex/power_mine_mcp.py --pretty agent-block-render --x 0 --y 64 --z 0
 python3 tools/codex/power_mine_mcp.py --pretty agent-screenshot
+python3 tools/codex/power_mine_mcp.py --pretty agent-camera-look --x 0 --y 64 --z 0 --screenshot
 python3 tools/codex/power_mine_mcp.py --pretty agent-recipe-check "minecraft:oak_log" --width 1 --height 1 --expected-output minecraft:oak_planks
 python3 tools/codex/power_mine_mcp.py --pretty agent-recipe-check "minecraft:log" --width 1 --height 1 --expected-output minecraft:planks
 python3 tools/codex/power_mine_mcp.py --pretty agent-craft-recipe "minecraft:oak_log" --width 1 --height 1 --expected-output minecraft:oak_planks
@@ -112,7 +114,7 @@ The Fabric agent is currently the most complete implementation for Minecraft `1.
 make agent
 ```
 
-The Forge `1.7.10` agent is a legacy implementation for old modpacks. It supports health/capabilities, state, inventory, give item, hotbar select, world open/create, world tick waiting, item/block right-click, world snapshot, screenshot capture, screenshot-based held-item and block visual probes, legacy crafting checks, runtime inventory craft, place block, and break block. Forge `1.7.10` recipes do not have stable IDs, so recipe checks report the matched recipe class. Held-item and block endpoints return visual probe metrics and PNG paths; baked-model introspection remains unsupported because the legacy renderer is not equivalent to modern baked models. Build it with:
+The Forge `1.7.10` agent is a legacy implementation for old modpacks. It supports health/capabilities, state, inventory, give item, hotbar select, world open/create, world tick waiting, item/block right-click, world snapshot, camera rotation, screenshot capture, screenshot-based held-item and block visual probes, legacy crafting checks, runtime inventory craft, place block, and break block. Forge `1.7.10` recipes do not have stable IDs, so recipe checks report the matched recipe class. Held-item and block endpoints return visual probe metrics and PNG paths; baked-model introspection remains unsupported because the legacy renderer is not equivalent to modern baked models. Build it with:
 
 ```bash
 make agent-forge

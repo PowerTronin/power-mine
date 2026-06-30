@@ -1709,6 +1709,7 @@ def legacy_agent_capabilities() -> dict[str, bool]:
         "selectHotbar": True,
         "worldSnapshot": True,
         "screenshot": True,
+        "cameraLook": False,
         "recipeCheck": True,
         "craftRecipe": False,
         "placeBlock": True,
@@ -4501,6 +4502,25 @@ TOOLS = [
         },
     },
     {
+        "name": "agent_camera_look",
+        "description": "Rotate the running client camera/head by yaw/pitch or toward x/y/z, optionally waiting and capturing a screenshot.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "yaw": {"type": "number", "description": "Absolute camera yaw in degrees. Use with pitch."},
+                "pitch": {"type": "number", "description": "Absolute camera pitch in degrees. Use with yaw."},
+                "x": {"type": "number", "description": "Target x coordinate to look at. Use with y and z."},
+                "y": {"type": "number", "description": "Target y coordinate to look at. Use with x and z."},
+                "z": {"type": "number", "description": "Target z coordinate to look at. Use with x and y."},
+                "center": {"type": "boolean", "description": "Add 0.5 to x/y/z target coordinates to look at block center.", "default": True},
+                "screenshot": {"type": "boolean", "description": "Capture a framebuffer screenshot after rotating.", "default": False},
+                "delay_ms": {"type": "integer", "description": "Delay after camera movement before screenshot. Defaults to 250 when screenshot=true, otherwise 0."},
+                "port": {"type": "integer", "description": "Agent localhost port.", "default": DEFAULT_AGENT_PORT},
+                "token": {"type": "string", "description": "Optional agent bearer token."},
+            },
+        },
+    },
+    {
         "name": "agent_recipe_check",
         "description": "Ask Minecraft RecipeManager whether a crafting grid matches and optionally whether inventory contains the inputs.",
         "inputSchema": {
@@ -4950,6 +4970,26 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             port=int(arguments.get("port", DEFAULT_AGENT_PORT)),
             token=arguments.get("token"),
         )
+    elif name == "agent_camera_look":
+        screenshot = bool(arguments.get("screenshot", False))
+        delay_ms = arguments.get("delay_ms")
+        if delay_ms is None:
+            delay_ms = 250 if screenshot else 0
+        body = {
+            "center": arguments.get("center", True) is not False,
+            "screenshot": screenshot,
+            "delayMs": int(delay_ms),
+        }
+        for key in ("yaw", "pitch", "x", "y", "z"):
+            if arguments.get(key) is not None:
+                body[key] = arguments.get(key)
+        data = agent_http_request(
+            "/camera/look",
+            method="POST",
+            port=int(arguments.get("port", DEFAULT_AGENT_PORT)),
+            token=arguments.get("token"),
+            body=body,
+        )
     elif name == "agent_recipe_check":
         data = agent_http_request(
             "/recipe/check",
@@ -5337,6 +5377,16 @@ def main(argv: list[str] | None = None) -> int:
 
     subparsers.add_parser("agent-screenshot", parents=[agent_parent], help="Capture a Minecraft screenshot through the agent")
 
+    camera_parser = subparsers.add_parser("agent-camera-look", parents=[agent_parent], help="Rotate the client camera/head and optionally capture a screenshot")
+    camera_parser.add_argument("--yaw", type=float, help="Absolute camera yaw in degrees; use with --pitch")
+    camera_parser.add_argument("--pitch", type=float, help="Absolute camera pitch in degrees; use with --yaw")
+    camera_parser.add_argument("--x", type=float, help="Target x coordinate; use with --y and --z")
+    camera_parser.add_argument("--y", type=float, help="Target y coordinate; use with --x and --z")
+    camera_parser.add_argument("--z", type=float, help="Target z coordinate; use with --x and --y")
+    camera_parser.add_argument("--center", action=argparse.BooleanOptionalAction, default=True, help="Look at the center of the x/y/z block target")
+    camera_parser.add_argument("--screenshot", action="store_true", help="Capture a framebuffer screenshot after rotating")
+    camera_parser.add_argument("--delay-ms", type=int, help="Delay after movement; defaults to 250 with --screenshot, otherwise 0")
+
     recipe_parser = subparsers.add_parser("agent-recipe-check", parents=[agent_parent], help="Check a crafting grid through RecipeManager")
     recipe_parser.add_argument("items", help="Comma-separated row-major item ids; use empty entries or minecraft:air for blank slots")
     recipe_parser.add_argument("--width", type=int, default=3)
@@ -5623,6 +5673,20 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "agent-screenshot":
             output = agent_http_request("/render/screenshot", port=args.port, token=args.token)
+        elif args.command == "agent-camera-look":
+            delay_ms = args.delay_ms
+            if delay_ms is None:
+                delay_ms = 250 if args.screenshot else 0
+            body = {
+                "center": args.center,
+                "screenshot": args.screenshot,
+                "delayMs": delay_ms,
+            }
+            for key in ("yaw", "pitch", "x", "y", "z"):
+                value = getattr(args, key)
+                if value is not None:
+                    body[key] = value
+            output = agent_http_request("/camera/look", method="POST", port=args.port, token=args.token, body=body)
         elif args.command == "agent-recipe-check":
             output = agent_http_request(
                 "/recipe/check",

@@ -72,6 +72,7 @@ public final class PowerMineAgentClient implements ClientModInitializer {
             register("GET", "/render/held-item", token, exchange -> clientThread(() -> heldItemRender(exchange)));
             register("GET", "/render/block", token, exchange -> clientThread(() -> blockRender(exchange)));
             register("GET", "/render/screenshot", token, exchange -> clientThread(this::screenshot));
+            register("POST", "/camera/look", token, exchange -> cameraLook(parseBody(exchange)));
             register("POST", "/input/release", token, exchange -> clientThread(this::releaseInput));
             register("POST", "/inventory/give", token, exchange -> clientThread(() -> giveItem(parseBody(exchange))));
             register("POST", "/hotbar/select", token, exchange -> clientThread(() -> selectHotbar(parseBody(exchange))));
@@ -151,6 +152,7 @@ public final class PowerMineAgentClient implements ClientModInitializer {
         capabilities.addProperty("heldItemRender", true);
         capabilities.addProperty("blockRender", true);
         capabilities.addProperty("bakedModelIntrospection", true);
+        capabilities.addProperty("cameraLook", true);
         capabilities.addProperty("pauseOnLostFocusControl", true);
         capabilities.addProperty("inputRelease", true);
         capabilities.addProperty("offhand", true);
@@ -377,6 +379,71 @@ public final class PowerMineAgentClient implements ClientModInitializer {
         result.addProperty("nonZeroSamples", nonZeroSamples);
         result.addProperty("blankLikely", nonZeroSamples == 0);
         return result;
+    }
+
+    private JsonObject cameraLook(JsonObject body) throws Exception {
+        JsonObject result = clientThread(() -> {
+            MinecraftClient client = requireLoadedClient();
+            boolean hasTarget = body.has("x") || body.has("y") || body.has("z");
+            float yaw;
+            float pitch;
+
+            JsonObject rotation = ok();
+            if (hasTarget) {
+                if (!body.has("x") || !body.has("y") || !body.has("z")) {
+                    throw new IllegalArgumentException("x, y, and z are required when looking at a target");
+                }
+                boolean center = optionalBool(body, "center", true);
+                double targetX = optionalDouble(body, "x", 0.0) + (center ? 0.5 : 0.0);
+                double targetY = optionalDouble(body, "y", 0.0) + (center ? 0.5 : 0.0);
+                double targetZ = optionalDouble(body, "z", 0.0) + (center ? 0.5 : 0.0);
+                Vec3d eye = client.player.getEyePos();
+                double dx = targetX - eye.x;
+                double dy = targetY - eye.y;
+                double dz = targetZ - eye.z;
+                double horizontal = Math.sqrt(dx * dx + dz * dz);
+                yaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+                pitch = (float) (-(Math.atan2(dy, horizontal) * 180.0 / Math.PI));
+
+                JsonObject target = new JsonObject();
+                target.addProperty("x", targetX);
+                target.addProperty("y", targetY);
+                target.addProperty("z", targetZ);
+                target.addProperty("center", center);
+                rotation.add("target", target);
+            } else {
+                if (!body.has("yaw") || !body.has("pitch")) {
+                    throw new IllegalArgumentException("pass either x/y/z target fields or yaw and pitch");
+                }
+                yaw = (float) optionalDouble(body, "yaw", client.player.getYaw());
+                pitch = (float) optionalDouble(body, "pitch", client.player.getPitch());
+            }
+
+            pitch = (float) Math.max(-90.0, Math.min(90.0, pitch));
+            setCameraRotation(client, yaw, pitch);
+            rotation.addProperty("yaw", yaw);
+            rotation.addProperty("pitch", pitch);
+            return rotation;
+        });
+        int delayMs = clamp(optionalInt(body, "delayMs", optionalInt(body, "delay_ms", 0)), 0, 2000);
+        if (delayMs > 0) {
+            Thread.sleep(delayMs);
+        }
+        if (optionalBool(body, "screenshot", false)) {
+            result.add("screenshot", clientThread(this::screenshot));
+        }
+        return result;
+    }
+
+    private void setCameraRotation(MinecraftClient client, float yaw, float pitch) {
+        client.player.setYaw(yaw);
+        client.player.setPitch(pitch);
+        client.player.setHeadYaw(yaw);
+        client.player.bodyYaw = yaw;
+        client.player.prevYaw = yaw;
+        client.player.prevPitch = pitch;
+        client.player.prevHeadYaw = yaw;
+        client.player.prevBodyYaw = yaw;
     }
 
     private JsonObject selectHotbar(JsonObject body) {
@@ -1227,6 +1294,10 @@ public final class PowerMineAgentClient implements ClientModInitializer {
 
     private int optionalInt(JsonObject body, String key, int fallback) {
         return body.has(key) ? body.get(key).getAsInt() : fallback;
+    }
+
+    private double optionalDouble(JsonObject body, String key, double fallback) {
+        return body.has(key) ? body.get(key).getAsDouble() : fallback;
     }
 
     private String optionalString(JsonObject body, String key, String fallback) {

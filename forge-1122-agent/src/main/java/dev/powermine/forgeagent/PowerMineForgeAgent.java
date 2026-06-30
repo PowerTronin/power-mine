@@ -124,6 +124,12 @@ public final class PowerMineForgeAgent {
                     return screenshot();
                 }
             });
+            register("POST", "/camera/look", token, new Route() {
+                @Override
+                public JsonObject handle(HttpExchange exchange) throws Exception {
+                    return cameraLook(parseBody(exchange));
+                }
+            });
             register("POST", "/input/release", token, new Route() {
                 @Override
                 public JsonObject handle(HttpExchange exchange) throws Exception {
@@ -265,6 +271,7 @@ public final class PowerMineForgeAgent {
         capabilities.addProperty("blockRender", true);
         capabilities.addProperty("bakedModelIntrospection", false);
         capabilities.addProperty("screenshotVisualProbe", true);
+        capabilities.addProperty("cameraLook", true);
         capabilities.addProperty("pauseOnLostFocusControl", true);
         capabilities.addProperty("inputRelease", true);
         capabilities.addProperty("offhand", true);
@@ -998,6 +1005,62 @@ public final class PowerMineForgeAgent {
         });
     }
 
+    private JsonObject cameraLook(final JsonObject body) throws Exception {
+        final JsonObject result = clientTask(new ClientTask() {
+            @Override
+            public JsonObject run() throws Exception {
+                Object player = requirePlayer();
+                boolean hasTarget = body.has("x") || body.has("y") || body.has("z");
+                float yaw;
+                float pitch;
+
+                JsonObject rotation = ok();
+                if (hasTarget) {
+                    if (!body.has("x") || !body.has("y") || !body.has("z")) {
+                        throw new IllegalArgumentException("x, y, and z are required when looking at a target");
+                    }
+                    boolean center = optionalBool(body, "center", true);
+                    double targetX = optionalDouble(body, "x", 0.0) + (center ? 0.5 : 0.0);
+                    double targetY = optionalDouble(body, "y", 0.0) + (center ? 0.5 : 0.0);
+                    double targetZ = optionalDouble(body, "z", 0.0) + (center ? 0.5 : 0.0);
+                    float[] targetRotation = rotationToPoint(player, targetX, targetY, targetZ);
+                    yaw = targetRotation[0];
+                    pitch = targetRotation[1];
+
+                    JsonObject target = new JsonObject();
+                    target.addProperty("x", targetX);
+                    target.addProperty("y", targetY);
+                    target.addProperty("z", targetZ);
+                    target.addProperty("center", center);
+                    rotation.add("target", target);
+                } else {
+                    if (!body.has("yaw") || !body.has("pitch")) {
+                        throw new IllegalArgumentException("pass either x/y/z target fields or yaw and pitch");
+                    }
+                    yaw = (float) optionalDouble(body, "yaw", floatField(player, 0, "rotationYaw", "field_70177_z"));
+                    pitch = (float) optionalDouble(body, "pitch", floatField(player, 0, "rotationPitch", "field_70125_A"));
+                }
+
+                pitch = Math.max(-90.0f, Math.min(90.0f, pitch));
+                setCameraRotation(player, yaw, pitch);
+                rotation.addProperty("yaw", yaw);
+                rotation.addProperty("pitch", pitch);
+                return rotation;
+            }
+        });
+
+        sleepForRenderFrame(optionalInt(body, "delayMs", optionalInt(body, "delay_ms", 0)));
+        if (optionalBool(body, "screenshot", false)) {
+            result.add("screenshot", clientTask(new ClientTask() {
+                @Override
+                public JsonObject run() throws Exception {
+                    return screenshotJson(captureScreenshot("camera-look"));
+                }
+            }));
+        }
+        return result;
+    }
+
     private ScreenshotCapture captureScreenshot(String prefix) throws Exception {
         Object mc = requireMinecraft();
         int width = intField(mc, 0, "displayWidth", "field_71443_c", "d");
@@ -1186,22 +1249,31 @@ public final class PowerMineForgeAgent {
         return new int[]{x, y, size, size};
     }
 
-    private void lookAtBlock(Object player, BlockPos pos) throws Exception {
+    private float[] rotationToPoint(Object player, double targetX, double targetY, double targetZ) throws Exception {
         double eyeX = doubleField(player, 0, "posX", "field_70165_t");
         double eyeY = doubleField(player, 0, "posY", "field_70163_u") + floatCall(player, 1.62f, "getEyeHeight", "func_70047_e");
         double eyeZ = doubleField(player, 0, "posZ", "field_70161_v");
-        double dx = (pos.x + 0.5) - eyeX;
-        double dy = (pos.y + 0.5) - eyeY;
-        double dz = (pos.z + 0.5) - eyeZ;
+        double dx = targetX - eyeX;
+        double dy = targetY - eyeY;
+        double dz = targetZ - eyeZ;
         double horizontal = Math.sqrt(dx * dx + dz * dz);
         float yaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
         float pitch = (float) (-(Math.atan2(dy, horizontal) * 180.0 / Math.PI));
+        return new float[]{yaw, Math.max(-90.0f, Math.min(90.0f, pitch))};
+    }
+
+    private void setCameraRotation(Object player, float yaw, float pitch) throws Exception {
         setField(player, yaw, "rotationYaw", "field_70177_z");
         setField(player, pitch, "rotationPitch", "field_70125_A");
         setOptionalField(player, yaw, "prevRotationYaw", "field_70126_B");
         setOptionalField(player, pitch, "prevRotationPitch", "field_70127_C");
         setOptionalField(player, yaw, "rotationYawHead", "field_70759_as");
         setOptionalField(player, yaw, "renderYawOffset", "field_70761_aq");
+    }
+
+    private void lookAtBlock(Object player, BlockPos pos) throws Exception {
+        float[] rotation = rotationToPoint(player, pos.x + 0.5, pos.y + 0.5, pos.z + 0.5);
+        setCameraRotation(player, rotation[0], rotation[1]);
     }
 
     private void sleepForRenderFrame(int millis) throws InterruptedException {
@@ -2333,6 +2405,10 @@ public final class PowerMineForgeAgent {
 
     private float optionalFloat(JsonObject body, String key, float fallback) {
         return body.has(key) ? body.get(key).getAsFloat() : fallback;
+    }
+
+    private double optionalDouble(JsonObject body, String key, double fallback) {
+        return body.has(key) ? body.get(key).getAsDouble() : fallback;
     }
 
     private String optionalString(JsonObject body, String key, String fallback) {
