@@ -33,13 +33,17 @@ case "$TARGET" in
   forge|forge-1.7.10)
     "$ROOT_DIR/scripts/build-forge-agent.sh"
     ;;
+  forge-1.12.2|forge-1122)
+    "$ROOT_DIR/scripts/build-forge-1122-agent.sh"
+    ;;
   all)
     build_fabric
     "$ROOT_DIR/scripts/build-forge-agent.sh"
+    "$ROOT_DIR/scripts/build-forge-1122-agent.sh"
     ;;
   *)
     echo "Unknown agent target: $TARGET" >&2
-    echo "Expected fabric-1.20.1, forge-1.7.10, or all." >&2
+    echo "Expected fabric-1.20.1, forge-1.7.10, forge-1.12.2, or all." >&2
     exit 2
     ;;
 esac

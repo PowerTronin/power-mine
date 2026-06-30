@@ -41,6 +41,7 @@ DEFAULT_AGENT_PORT = 39276
 AGENT_MOD_FILE_NAME = "power-mine-agent.jar"
 FABRIC_AGENT_TARGET = "fabric-1.20.1"
 FORGE_1710_AGENT_TARGET = "forge-1.7.10"
+FORGE_1122_AGENT_TARGET = "forge-1.12.2"
 AGENT_TARGETS = {
     FABRIC_AGENT_TARGET: {
         "loader": "fabric",
@@ -55,6 +56,13 @@ AGENT_TARGETS = {
         "libs": ("forge-agent", "build", "libs"),
         "fileName": "power-mine-forge-1.7.10-agent.jar",
         "description": "Forge 1.7.10 runtime agent",
+    },
+    FORGE_1122_AGENT_TARGET: {
+        "loader": "forge",
+        "minecraftVersion": "1.12.2",
+        "libs": ("forge-1122-agent", "build", "libs"),
+        "fileName": "power-mine-forge-1.12.2-agent.jar",
+        "description": "Forge 1.12.2 runtime agent",
     },
 }
 PROFILE_PROVIDED_MOD_IDS = {"minecraft", "java", "fabricloader", "quilt_loader", "forge", "fml"}
@@ -1369,6 +1377,9 @@ def normalize_agent_target(target: str | None) -> str:
         "forge": FORGE_1710_AGENT_TARGET,
         "forge-1.7.10": FORGE_1710_AGENT_TARGET,
         "1.7.10-forge": FORGE_1710_AGENT_TARGET,
+        "forge-1.12.2": FORGE_1122_AGENT_TARGET,
+        "forge-1122": FORGE_1122_AGENT_TARGET,
+        "1.12.2-forge": FORGE_1122_AGENT_TARGET,
     }
     normalized = aliases.get(target, target)
     if normalized not in AGENT_TARGETS:
@@ -1383,6 +1394,8 @@ def agent_target_for_profile(profile: dict[str, Any]) -> str:
         return FABRIC_AGENT_TARGET
     if loader == "forge" and minecraft_version == "1.7.10":
         return FORGE_1710_AGENT_TARGET
+    if loader == "forge" and minecraft_version == "1.12.2":
+        return FORGE_1122_AGENT_TARGET
     raise ValueError(
         f"no runtime agent is available for loader={loader or 'vanilla'} minecraft={minecraft_version or 'unknown'}"
     )
@@ -3116,7 +3129,7 @@ IGNORED_LOG_PATTERNS = [
     re.compile(r"FML appears to be missing any signature data", re.I),
     re.compile(r"THIS IS NOT A ERROR", re.I),
     re.compile(r"A detailed walkthrough of the error, its code path and all known details is as follows:", re.I),
-    re.compile(r"Attempting connection with missing mods \[mcp, FML, Forge(?:, [^\]]+)?\] at (?:CLIENT|SERVER)", re.I),
+    re.compile(r"Attempting connection with missing mods \[(?:minecraft,\s*)?mcp,\s*FML,\s*forge(?:,\s*[^\]]+)?\] at (?:CLIENT|SERVER)", re.I),
     re.compile(r"Attempting connection with missing mods \[\] at (?:CLIENT|SERVER)", re.I),
     re.compile(r"Couldn't initialize twitch stream", re.I),
     re.compile(r"Could not save the splash\.properties file", re.I),
@@ -4126,7 +4139,7 @@ TOOLS = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Agent target: fabric-1.20.1 or forge-1.7.10. Defaults to fabric-1.20.1.",
+                    "description": "Agent target: fabric-1.20.1, forge-1.7.10, or forge-1.12.2. Defaults to fabric-1.20.1.",
                     "default": FABRIC_AGENT_TARGET,
                 },
             },
@@ -5148,11 +5161,11 @@ def main(argv: list[str] | None = None) -> int:
     delete_mod_parser.add_argument("--profile-id", help="Profile id; defaults to selected profile")
 
     build_agent_parser = subparsers.add_parser("build-agent", help="Build an in-game agent mod")
-    build_agent_parser.add_argument("--target", default=FABRIC_AGENT_TARGET, help="fabric-1.20.1 or forge-1.7.10")
+    build_agent_parser.add_argument("--target", default=FABRIC_AGENT_TARGET, help="fabric-1.20.1, forge-1.7.10, or forge-1.12.2")
 
     install_agent_parser = subparsers.add_parser("install-agent", help="Build and install the agent mod into a profile")
     install_agent_parser.add_argument("--profile-id", help="Profile id; defaults to selected profile")
-    install_agent_parser.add_argument("--target", help="Explicit target: fabric-1.20.1 or forge-1.7.10")
+    install_agent_parser.add_argument("--target", help="Explicit target: fabric-1.20.1, forge-1.7.10, or forge-1.12.2")
     install_agent_parser.add_argument("--no-build", action="store_true", help="Use the existing agent jar")
     install_agent_parser.add_argument("--no-replace", action="store_true", help="Do not replace an existing installed agent")
 

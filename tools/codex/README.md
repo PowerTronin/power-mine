@@ -17,7 +17,7 @@ It can:
 - import, enable, disable, and delete profile mod jars;
 - call the launcher headless commands to install, repair, or launch a profile;
 - create and operate Vanilla, Fabric, Quilt, Forge, and NeoForge launcher profiles, including legacy Forge `1.7.10` installers;
-- build and install the experimental in-game bridge agents for Fabric `1.20.1` and Forge `1.7.10`;
+- build and install the experimental in-game bridge agents for Fabric `1.20.1`, Forge `1.7.10`, and Forge `1.12.2`;
 - ask a running agent to open or create a local singleplayer test world when that agent supports it;
 - query the running agent for player/world state and inventory;
 - release captured mouse input and disable pause-on-lost-focus during automation sessions;
@@ -53,6 +53,7 @@ python3 tools/codex/power_mine_mcp.py --pretty import-mod ~/Downloads/example-mo
 python3 tools/codex/power_mine_mcp.py --pretty set-mod-enabled example-mod.jar --profile-id <profile-id> --no-enabled
 python3 tools/codex/power_mine_mcp.py --pretty build-agent
 python3 tools/codex/power_mine_mcp.py --pretty build-agent --target forge-1.7.10
+python3 tools/codex/power_mine_mcp.py --pretty build-agent --target forge-1.12.2
 python3 tools/codex/power_mine_mcp.py --pretty install-agent --profile-id <profile-id>
 python3 tools/codex/power_mine_mcp.py --pretty repair-profile <profile-id>
 python3 tools/codex/power_mine_mcp.py --pretty launch-profile <profile-id>
@@ -117,6 +118,12 @@ The Forge `1.7.10` agent is a legacy implementation for old modpacks. It support
 make agent-forge
 ```
 
+The Forge `1.12.2` agent covers the same runtime bridge surface for later legacy packs, including the offhand inventory slot and Forge recipe registry ids when available. It still uses screenshot visual probes for held-item and block render checks. Build it with:
+
+```bash
+make agent-forge-1122
+```
+
 Then install the matching agent into a supported profile:
 
 ```bash
@@ -129,7 +136,7 @@ Set `POWER_MINE_AGENT_PORT` or JVM property `power.mine.agent.port` to change th
 
 Block placement and breaking are deliberately limited to integrated singleplayer worlds. The launcher can pass
 `--quick-play-singleplayer` for an existing world. A running agent can also handle `agent-world-open`: Fabric
-`1.20.1` opens existing local worlds, while Forge `1.7.10` can create a fresh local test world from the title screen.
+`1.20.1` opens existing local worlds, while Forge `1.7.10` and Forge `1.12.2` can create a fresh local test world from the title screen.
 Headless launches force `pauseOnLostFocus:false` in `options.txt` unless `--keep-pause-on-lost-focus` is passed.
 Use `agent-release-input` after entering a world to ask the agent to release captured mouse input.
 Use `agent-wait-ticks`, `agent-use-item`, `agent-use-block`, `agent-interaction-check`, and `agent-craft-recipe` when a mod needs runtime behavior checks beyond static assets, recipes, and block placement. `agent-interaction-check` wraps the raw right-click call with before/after state, inventory, block snapshots, tick waiting, and optional expectations. `agent-craft-recipe` uses the recipe system and player inventory directly; it does not automate mouse clicks in the crafting GUI.
