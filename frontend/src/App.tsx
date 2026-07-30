@@ -3215,6 +3215,12 @@ function ProfileDetail({
     onBulkToggleMods: (profileId: string, fileNames: string[], enabled: boolean) => void;
     onDeleteMod: (profileId: string, fileName: string) => void;
 }) {
+    const [healthReviewOpen, setHealthReviewOpen] = useState(false);
+
+    useEffect(() => {
+        setHealthReviewOpen(false);
+    }, [profile?.id]);
+
     if (!profile) {
         return <EmptyState title="Select a profile" action="No profile selected."/>;
     }
@@ -3224,6 +3230,21 @@ function ProfileDetail({
     const repairVisible = shouldShowRepairButton(profile, progress);
     const playReason = playDisabledReason(profile, launch, javaRuntime);
     const stopVisible = shouldShowStopButton(launch);
+    const healthProps: ProfileHealthProps = {
+        profile,
+        progress,
+        launch,
+        javaRuntime,
+        javaInstallProgress,
+        modList,
+        modrinthUpdatePlans,
+        onInstall,
+        onRepair,
+        onInstallJava,
+        onStop,
+        onBrowseMods: (profileId) => onBrowseMod(profileId, '', ''),
+        onOpenLogs,
+    };
 
     return (
         <section className="profile-detail">
@@ -3242,21 +3263,16 @@ function ProfileDetail({
                 </div>
                 <ProgressBar progress={progress}/>
             </div>
-            <ProfileHealthPanel
-                profile={profile}
-                progress={progress}
-                launch={launch}
-                javaRuntime={javaRuntime}
-                javaInstallProgress={javaInstallProgress}
-                modList={modList}
-                modrinthUpdatePlans={modrinthUpdatePlans}
-                onInstall={onInstall}
-                onRepair={onRepair}
-                onInstallJava={onInstallJava}
-                onStop={onStop}
-                onBrowseMods={(profileId) => onBrowseMod(profileId, '', '')}
-                onOpenLogs={onOpenLogs}
+            <ProfileHealthReviewCard
+                {...healthProps}
+                onReview={() => setHealthReviewOpen(true)}
             />
+            {healthReviewOpen && (
+                <ProfileHealthReviewModal
+                    {...healthProps}
+                    onClose={() => setHealthReviewOpen(false)}
+                />
+            )}
             <dl className="detail-grid compact">
                 <div>
                     <dt>Minecraft</dt>
