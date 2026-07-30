@@ -100,7 +100,7 @@ Headless profile install, repair, and launch use the Power Mine binary. The tool
 1. `POWER_MINE_BINARY`
 2. `build/bin/power-mine`
 3. `go run -tags desktop,production[,webkit2_41] .` from `POWER_MINE_REPO`
-4. `dist/power-mine-0.1.0-linux-x86_64.appimage`
+4. `dist/power-mine-0.2.0-linux-x86_64.appimage`
 
 Set `POWER_MINE_GO_TAGS` to override the fallback Go build tags.
 

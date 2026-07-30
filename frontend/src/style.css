@@ -1,14 +1,48 @@
+:root {
+    --pc-bg: #050505;
+    --pc-panel: #121212;
+    --pc-surface: #0a0a0a;
+    --pc-surface-strong: #111111;
+    --pc-surface-2: #141414;
+    --pc-text: #ffffff;
+    --pc-text-muted: rgba(255, 255, 255, 0.75);
+    --pc-text-soft: rgba(255, 255, 255, 0.65);
+    --pc-text-subtle: rgba(255, 255, 255, 0.5);
+    --pc-border: #ffffff;
+    --pc-action-bg: #050505;
+    --pc-action-hover: #111111;
+    --pc-action-text: #ffffff;
+    --pc-action-inverse-bg: #ffffff;
+    --pc-action-inverse-hover: #e5e7eb;
+    --pc-action-inverse-text: #050505;
+    --pc-action-inverse-muted: rgba(5, 5, 5, 0.6);
+    --pc-danger-bg: #1a0d0d;
+    --pc-online: #4ade80;
+    --pc-offline: rgba(255, 255, 255, 0.35);
+    --pm-warning: #facc15;
+    --pm-error: #ff8f84;
+    --pm-error-border: #ffb8b0;
+    background: var(--pc-bg);
+    color: var(--pc-text);
+}
+
 html {
-    background-color: #121411;
-    color: #f1f4ed;
+    background-color: var(--pc-bg);
+    color: var(--pc-text);
+    height: 100%;
 }
 
 body {
     margin: 0;
-    font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
-    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
+    height: 100%;
+    overflow: hidden;
+    font-family: "IBM Plex Sans", "Manrope", "Nunito", "Aptos", "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased;
+    background: var(--pc-bg);
+    color: var(--pc-text);
+    transition:
+        background-color 180ms ease,
+        color 180ms ease;
 }
 
 @font-face {
@@ -19,6 +53,7 @@ body {
     url("assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
 }
 
+#root,
 #app {
     height: 100vh;
 }

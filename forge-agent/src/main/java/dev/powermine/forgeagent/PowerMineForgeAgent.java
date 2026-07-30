@@ -47,7 +47,7 @@ import javax.imageio.ImageIO;
 )
 public final class PowerMineForgeAgent {
     public static final String MOD_ID = "power_mine_agent";
-    public static final String VERSION = "0.1.0";
+    public static final String VERSION = "0.2.0";
 
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
     private static final int DEFAULT_PORT = 39276;

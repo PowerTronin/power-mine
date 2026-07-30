@@ -8,7 +8,7 @@ The current preview targets macOS and Linux with local profile management, offli
 
 Preview builds are published on GitHub Releases.
 
-- `PowerMine-0.1.0-macos-amd64.dmg` is the first macOS Intel installer image.
+- `PowerMine-0.2.0-macos-amd64.dmg` is the current macOS Intel installer image.
 - Linux AppImage builds are published as `power-mine-<version>-linux-x86_64.appimage`.
 - Local Linux packaging is available through `make appimage`; the file is written to `dist/`.
 
@@ -102,9 +102,9 @@ Useful commands:
 - `wails dev` starts the desktop app in development mode.
 - `wails build` creates a production build.
 - `make appimage` creates `dist/power-mine-<version>-linux-<arch>.appimage`.
-- `make agent` builds the Fabric `1.20.1` in-game Codex agent at `agent/build/libs/power-mine-agent-0.1.0.jar`.
-- `make agent-forge` builds the Forge `1.7.10` in-game Codex agent at `forge-agent/build/libs/power-mine-forge-1.7.10-agent-0.1.0.jar`.
-- `make agent-forge-1122` builds the Forge `1.12.2` in-game Codex agent at `forge-1122-agent/build/libs/power-mine-forge-1.12.2-agent-0.1.0.jar`.
+- `make agent` builds the Fabric `1.20.1` in-game Codex agent at `agent/build/libs/power-mine-agent-0.2.0.jar`.
+- `make agent-forge` builds the Forge `1.7.10` in-game Codex agent at `forge-agent/build/libs/power-mine-forge-1.7.10-agent-0.2.0.jar`.
+- `make agent-forge-1122` builds the Forge `1.12.2` in-game Codex agent at `forge-1122-agent/build/libs/power-mine-forge-1.12.2-agent-0.2.0.jar`.
 - `make agent-all` builds all runtime agents.
 - `python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile` runs headless mod diagnostics for Codex/local automation.
 - `python3 tools/codex/power_mine_mcp.py --pretty install-java 8` installs the managed Java 8 runtime used by legacy Minecraft and Forge profiles.

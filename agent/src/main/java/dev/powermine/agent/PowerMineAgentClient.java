@@ -119,7 +119,7 @@ public final class PowerMineAgentClient implements ClientModInitializer {
     private JsonObject health(HttpExchange exchange) {
         JsonObject result = ok();
         result.addProperty("name", "power-mine-agent");
-        result.addProperty("version", "0.1.0");
+        result.addProperty("version", "0.2.0");
         result.addProperty("protocolVersion", "power-mine-agent/v1");
         result.addProperty("loader", "fabric");
         result.addProperty("minecraftVersion", "1.20.1");
@@ -131,7 +131,7 @@ public final class PowerMineAgentClient implements ClientModInitializer {
         JsonObject result = ok();
         result.addProperty("protocolVersion", "power-mine-agent/v1");
         result.addProperty("agentId", "power-mine-fabric-agent");
-        result.addProperty("agentVersion", "0.1.0");
+        result.addProperty("agentVersion", "0.2.0");
         result.addProperty("loader", "fabric");
         result.addProperty("minecraftVersion", "1.20.1");
 

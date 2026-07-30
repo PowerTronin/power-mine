@@ -1255,7 +1255,7 @@ def find_power_mine_binary() -> list[str]:
             return [str(candidate)]
     if shutil.which("go") and (repo / "go.mod").is_file():
         return power_mine_go_run_command()
-    appimage = repo / "dist" / "power-mine-0.1.0-linux-x86_64.appimage"
+    appimage = repo / "dist" / "power-mine-0.2.0-linux-x86_64.appimage"
     if appimage.is_file() and os.access(appimage, os.X_OK):
         return [str(appimage)]
     raise FileNotFoundError("Power Mine binary not found; set POWER_MINE_BINARY or build the launcher")
@@ -5092,7 +5092,7 @@ def run_mcp_server() -> int:
                 write_mcp_message(mcp_result(request_id, {
                     "protocolVersion": protocol,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "power-mine", "version": "0.1.0"},
+                    "serverInfo": {"name": "power-mine", "version": "0.2.0"},
                 }))
             elif method == "tools/list":
                 write_mcp_message(mcp_result(request_id, {"tools": TOOLS}))

@@ -3,7 +3,7 @@
     "modid": "power_mine_agent",
     "name": "Power Mine Forge Agent",
     "description": "Local singleplayer automation bridge for the Power Mine Codex tool on legacy Forge.",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "mcversion": "1.7.10",
     "url": "",
     "updateUrl": "",

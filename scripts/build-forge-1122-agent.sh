@@ -11,7 +11,7 @@ SRC_DIR="$ROOT_DIR/forge-1122-agent/src/main/java"
 RES_DIR="$ROOT_DIR/forge-1122-agent/src/main/resources"
 BUILD_DIR="$ROOT_DIR/forge-1122-agent/build"
 CLASS_DIR="$BUILD_DIR/classes"
-JAR_PATH="$BUILD_DIR/libs/power-mine-forge-1.12.2-agent-0.1.0.jar"
+JAR_PATH="$BUILD_DIR/libs/power-mine-forge-1.12.2-agent-0.2.0.jar"
 JAVAC_BIN="${JAVAC:-javac}"
 JAR_BIN="${JAR:-jar}"
 
