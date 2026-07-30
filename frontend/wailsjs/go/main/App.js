@@ -6,6 +6,10 @@ export function AppInfo() {
   return window['go']['main']['App']['AppInfo']();
 }
 
+export function ClearLauncherLogs() {
+  return window['go']['main']['App']['ClearLauncherLogs']();
+}
+
 export function CreateProfile(arg1) {
   return window['go']['main']['App']['CreateProfile'](arg1);
 }
@@ -78,6 +82,10 @@ export function InstallProfile(arg1) {
   return window['go']['main']['App']['InstallProfile'](arg1);
 }
 
+export function IsLogsWindow() {
+  return window['go']['main']['App']['IsLogsWindow']();
+}
+
 export function LaunchProfile(arg1) {
   return window['go']['main']['App']['LaunchProfile'](arg1);
 }
@@ -92,6 +100,10 @@ export function ListForgeLoaderVersions() {
 
 export function ListInstalledModrinthProjects(arg1) {
   return window['go']['main']['App']['ListInstalledModrinthProjects'](arg1);
+}
+
+export function ListLauncherLogs() {
+  return window['go']['main']['App']['ListLauncherLogs']();
 }
 
 export function ListMinecraftVersions() {
@@ -124,6 +136,10 @@ export function ListProfiles() {
 
 export function ListQuiltLoaderVersions() {
   return window['go']['main']['App']['ListQuiltLoaderVersions']();
+}
+
+export function OpenLauncherLogsWindow() {
+  return window['go']['main']['App']['OpenLauncherLogsWindow']();
 }
 
 export function OpenProfileLogsFolder(arg1) {
@@ -162,6 +178,10 @@ export function ReadProfileGameLog(arg1, arg2) {
   return window['go']['main']['App']['ReadProfileGameLog'](arg1, arg2);
 }
 
+export function RecordLauncherLog(arg1) {
+  return window['go']['main']['App']['RecordLauncherLog'](arg1);
+}
+
 export function RefreshVersionCatalog() {
   return window['go']['main']['App']['RefreshVersionCatalog']();
 }
@@ -188,6 +208,10 @@ export function SelectProfile(arg1) {
 
 export function SetProfileModEnabled(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetProfileModEnabled'](arg1, arg2, arg3);
+}
+
+export function StopProfile(arg1) {
+  return window['go']['main']['App']['StopProfile'](arg1);
 }
 
 export function UpdateModrinthModFile(arg1, arg2, arg3) {

@@ -106,6 +106,18 @@ func TestForgeVersionID(t *testing.T) {
 	}
 }
 
+func TestNormalizeForgeLoaderVersion(t *testing.T) {
+	if got := normalizeForgeLoaderVersion("1.7.10", "10.13.4.1614-1.7.10"); got != "1.7.10-10.13.4.1614-1.7.10" {
+		t.Fatalf("normalized legacy Forge version = %q", got)
+	}
+	if got := normalizeForgeLoaderVersion("1.7.10", "1.7.10-10.13.4.1614-1.7.10"); got != "1.7.10-10.13.4.1614-1.7.10" {
+		t.Fatalf("normalized full legacy Forge version = %q", got)
+	}
+	if got := normalizeForgeLoaderVersion("1.20.1", "47.4.20"); got != "1.20.1-47.4.20" {
+		t.Fatalf("normalized modern Forge version = %q", got)
+	}
+}
+
 func TestReadLegacyForgeInstallerProfileUsesVersionInfo(t *testing.T) {
 	installerPath := filepath.Join(t.TempDir(), "forge-1.7.10-installer.jar")
 	writeTestZip(t, installerPath, map[string]string{
@@ -190,6 +202,36 @@ func TestExtractLegacyForgeInstallArtifact(t *testing.T) {
 	}
 }
 
+func TestMergeForgeProfilePutsForgeLibrariesBeforeInheritedLibraries(t *testing.T) {
+	base := versionMetadata{
+		ID: "1.7.10",
+		Libraries: []libraryMetadata{
+			{Name: "com.google.guava:guava:15.0"},
+		},
+	}
+	forge := versionMetadata{
+		ID: "1.7.10-Forge10.13.4.1614-1.7.10",
+		Libraries: []libraryMetadata{
+			{Name: "net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10"},
+			{Name: "com.google.guava:guava:17.0"},
+		},
+	}
+
+	merged := mergeForgeProfile(base, forge, "1.7.10-forge-10.13.4.1614-1.7.10")
+	if len(merged.Libraries) != 3 {
+		t.Fatalf("merged libraries = %d, want 3", len(merged.Libraries))
+	}
+	if got := merged.Libraries[0].Name; got != "net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10" {
+		t.Fatalf("first library = %q", got)
+	}
+	if got := merged.Libraries[1].Name; got != "com.google.guava:guava:17.0" {
+		t.Fatalf("second library = %q", got)
+	}
+	if got := merged.Libraries[2].Name; got != "com.google.guava:guava:15.0" {
+		t.Fatalf("third library = %q", got)
+	}
+}
+
 func TestNeoForgeVersionID(t *testing.T) {
 	if got := NeoForgeVersionID("1.21.1", "21.1.207"); got != "1.21.1-neoforge-21.1.207" {
 		t.Fatalf("NeoForgeVersionID version = %q", got)
@@ -229,15 +271,15 @@ func TestNormalizeLibraryDownloads(t *testing.T) {
 	}}
 
 	normalizeLibraryDownloads(libraries)
-	artifact := libraries[0].Downloads.Artifact
-	if artifact.Path != "net/fabricmc/fabric-loader/0.18.0/fabric-loader-0.18.0.jar" {
-		t.Fatalf("artifact path = %q", artifact.Path)
+	downloadArtifact := libraries[0].Downloads.Artifact
+	if downloadArtifact.Path != "net/fabricmc/fabric-loader/0.18.0/fabric-loader-0.18.0.jar" {
+		t.Fatalf("artifact path = %q", downloadArtifact.Path)
 	}
-	if artifact.URL != "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.18.0/fabric-loader-0.18.0.jar" {
-		t.Fatalf("artifact url = %q", artifact.URL)
+	if downloadArtifact.URL != "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.18.0/fabric-loader-0.18.0.jar" {
+		t.Fatalf("artifact url = %q", downloadArtifact.URL)
 	}
-	if artifact.SHA1 != "abc123" || artifact.Size != 42 {
-		t.Fatalf("artifact verification = %#v", artifact)
+	if downloadArtifact.SHA1 != "abc123" || downloadArtifact.Size != 42 {
+		t.Fatalf("artifact verification = %#v", downloadArtifact)
 	}
 
 	fallbacks := []libraryMetadata{
@@ -247,6 +289,20 @@ func TestNormalizeLibraryDownloads(t *testing.T) {
 		},
 		{
 			Name: "net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10",
+		},
+		{
+			Name: "org.lwjgl.lwjgl:lwjgl-platform:2.9.1",
+			Downloads: struct {
+				Artifact    artifact            `json:"artifact"`
+				Classifiers map[string]artifact `json:"classifiers"`
+			}{
+				Classifiers: map[string]artifact{
+					"natives-linux": {Path: "org/lwjgl/lwjgl/lwjgl-platform/2.9.1/lwjgl-platform-2.9.1-natives-linux.jar"},
+				},
+			},
+			Natives: map[string]string{
+				"linux": "natives-linux",
+			},
 		},
 	}
 	normalizeLibraryDownloads(fallbacks)
@@ -258,6 +314,9 @@ func TestNormalizeLibraryDownloads(t *testing.T) {
 	}
 	if got := fallbacks[1].Downloads.Artifact.URL; got != "https://maven.minecraftforge.net/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10.jar" {
 		t.Fatalf("default Forge library URL = %q", got)
+	}
+	if fallbacks[2].Downloads.Artifact.Path != "" {
+		t.Fatalf("native-only library should not get synthetic artifact: %#v", fallbacks[2].Downloads.Artifact)
 	}
 }
 

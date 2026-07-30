@@ -1,25 +1,26 @@
-# Power Mine 0.1.0
+# Power Mine 0.2.0
 
-First preview release of Power Mine, a Go + Wails Minecraft launcher.
+Second preview release of Power Mine, a Go + Wails Minecraft launcher and Codex mod-development tool.
 
 License: GPL-3.0.
 
 ## Included
 
-- Profile creation, install, repair, and launch.
+- Profile creation, install, repair, launch, and stop.
 - Offline player mode for offline servers.
 - Java runtime checks and Java installation from the launcher.
 - Vanilla, Fabric, Quilt, Forge, and NeoForge foundations.
 - Modrinth browsing, dependency prompts, install/delete/update flows.
 - Local mod manager with bulk enable/disable.
-- Launcher and game logs.
+- Launcher and game logs, including a separate logs window, focus mode, and basic log appearance controls.
 - Modrinth `.mrpack` import/export.
-- Headless Codex diagnostics tool for inspecting profiles, mod jars, loader/version compatibility, and recent crash/log output.
+- Headless Codex diagnostics tool for inspecting profiles, mod jars, loader/version compatibility, recent crash/log output, and runtime agent smoke tests.
+- Runtime bridge agents for Fabric `1.20.1`, Forge `1.7.10`, and Forge `1.12.2`.
 
 ## Installers
 
-- `PowerMine-0.1.0-macos-amd64.dmg` is the first macOS Intel build.
-- `power-mine-0.1.0-linux-x86_64.appimage` is the first Linux AppImage build.
+- `PowerMine-0.2.0-macos-amd64.dmg` is the macOS Intel build.
+- `power-mine-0.2.0-linux-x86_64.appimage` is the Linux AppImage build.
 
 ## Codex Tool
 

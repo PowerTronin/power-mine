@@ -20,12 +20,21 @@ func main() {
 
 	// Create an instance of the app structure
 	app := NewApp()
+	app.logsWindow = isLogsWindowArgs(os.Args[1:])
+	title := "Power Mine"
+	width := 1180
+	height := 760
+	if app.logsWindow {
+		title = "Power Mine Logs"
+		width = 1040
+		height = 720
+	}
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "Power Mine",
-		Width:  1180,
-		Height: 760,
+		Title:  title,
+		Width:  width,
+		Height: height,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -39,4 +48,13 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+func isLogsWindowArgs(args []string) bool {
+	for _, arg := range args {
+		if arg == "--logs-window" {
+			return true
+		}
+	}
+	return false
 }

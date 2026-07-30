@@ -27,12 +27,14 @@ type headlessResponse struct {
 }
 
 type headlessLaunchResult struct {
-	ProfileID string `json:"profileId"`
-	Status    string `json:"status"`
-	Message   string `json:"message"`
-	PID       int    `json:"pid"`
-	LogPath   string `json:"logPath,omitempty"`
-	StartedAt string `json:"startedAt"`
+	ProfileID                  string `json:"profileId"`
+	Status                     string `json:"status"`
+	Message                    string `json:"message"`
+	PID                        int    `json:"pid"`
+	LogPath                    string `json:"logPath,omitempty"`
+	StartedAt                  string `json:"startedAt"`
+	PauseOnLostFocusDisabled   bool   `json:"pauseOnLostFocusDisabled"`
+	PauseOnLostFocusWasChanged bool   `json:"pauseOnLostFocusWasChanged"`
 }
 
 func runHeadless(ctx context.Context, args []string) int {
@@ -188,6 +190,7 @@ func runHeadlessLaunch(ctx context.Context, app *App, args []string) (headlessLa
 	flags.SetOutput(os.Stderr)
 	profileID := flags.String("profile-id", "", "profile id")
 	quickPlaySingleplayer := flags.String("quick-play-singleplayer", "", "singleplayer world name to open with Minecraft Quick Play")
+	keepPauseOnLostFocus := flags.Bool("keep-pause-on-lost-focus", false, "do not force pauseOnLostFocus:false before launch")
 	if err := flags.Parse(args); err != nil {
 		return headlessLaunchResult{}, err
 	}
@@ -225,6 +228,15 @@ func runHeadlessLaunch(ctx context.Context, app *App, args []string) (headlessLa
 		return headlessLaunchResult{}, fmt.Errorf("minecraft %s requires Java %d", profile.MinecraftVersion, requiredJava)
 	}
 
+	pauseOnLostFocusChanged := false
+	if !*keepPauseOnLostFocus {
+		changed, err := minecraft.SetPauseOnLostFocus(profile.GameDir, false)
+		if err != nil {
+			return headlessLaunchResult{}, fmt.Errorf("disable pauseOnLostFocus: %w", err)
+		}
+		pauseOnLostFocusChanged = changed
+	}
+
 	commandSpec, err := app.minecraftService.BuildLaunchCommand(ctx, profile, minecraft.LaunchOptions{
 		JavaPath:      javaPath,
 		Memory:        profile.Memory,
@@ -247,17 +259,20 @@ func runHeadlessLaunch(ctx context.Context, app *App, args []string) (headlessLa
 	command.Stdout = logFile
 	command.Stderr = logFile
 	command.Stdin = nil
+	detachCommand(command)
 	if err := command.Start(); err != nil {
 		return headlessLaunchResult{}, err
 	}
 
 	return headlessLaunchResult{
-		ProfileID: profile.ID,
-		Status:    "running",
-		Message:   "Minecraft process started",
-		PID:       command.Process.Pid,
-		LogPath:   logPath,
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		ProfileID:                  profile.ID,
+		Status:                     "running",
+		Message:                    "Minecraft process started",
+		PID:                        command.Process.Pid,
+		LogPath:                    logPath,
+		StartedAt:                  time.Now().UTC().Format(time.RFC3339),
+		PauseOnLostFocusDisabled:   !*keepPauseOnLostFocus,
+		PauseOnLostFocusWasChanged: pauseOnLostFocusChanged,
 	}, nil
 }
 

@@ -26,7 +26,10 @@ import net.minecraft.registry.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.ActionResult;
+import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
@@ -60,23 +63,33 @@ public final class PowerMineAgentClient implements ClientModInitializer {
         try {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
             register("GET", "/health", token, this::health);
+            register("GET", "/bridge/capabilities", token, exchange -> bridgeCapabilities());
+            register("GET", "/capabilities", token, exchange -> bridgeCapabilities());
             register("GET", "/state", token, exchange -> clientThread(this::state));
             register("GET", "/inventory", token, exchange -> clientThread(this::inventory));
             register("GET", "/world/snapshot", token, exchange -> clientThread(() -> worldSnapshot(exchange)));
+            register("POST", "/world/open", token, exchange -> clientThread(() -> openWorld(parseBody(exchange))));
             register("GET", "/render/held-item", token, exchange -> clientThread(() -> heldItemRender(exchange)));
             register("GET", "/render/block", token, exchange -> clientThread(() -> blockRender(exchange)));
             register("GET", "/render/screenshot", token, exchange -> clientThread(this::screenshot));
+            register("POST", "/camera/look", token, exchange -> cameraLook(parseBody(exchange)));
+            register("POST", "/input/release", token, exchange -> clientThread(this::releaseInput));
             register("POST", "/inventory/give", token, exchange -> clientThread(() -> giveItem(parseBody(exchange))));
             register("POST", "/hotbar/select", token, exchange -> clientThread(() -> selectHotbar(parseBody(exchange))));
             register("POST", "/block/place", token, exchange -> clientThread(() -> placeBlock(parseBody(exchange))));
             register("POST", "/block/break", token, exchange -> clientThread(() -> breakBlock(parseBody(exchange))));
             register("POST", "/recipe/check", token, exchange -> clientThread(() -> recipeCheck(parseBody(exchange))));
+            register("POST", "/recipe/craft", token, exchange -> clientThread(() -> craftRecipe(parseBody(exchange))));
+            register("POST", "/tick/wait", token, exchange -> waitTicks(parseBody(exchange)));
+            register("POST", "/item/use", token, exchange -> clientThread(() -> useItem(parseBody(exchange))));
+            register("POST", "/block/use", token, exchange -> clientThread(() -> useBlock(parseBody(exchange))));
             server.setExecutor(Executors.newCachedThreadPool(runnable -> {
                 Thread thread = new Thread(runnable, "Power Mine Agent HTTP");
                 thread.setDaemon(true);
                 return thread;
             }));
             server.start();
+            disablePauseOnLostFocus(MinecraftClient.getInstance());
             System.out.println("[Power Mine Agent] listening on 127.0.0.1:" + port);
         } catch (IOException exc) {
             System.err.println("[Power Mine Agent] failed to start: " + exc.getMessage());
@@ -106,8 +119,52 @@ public final class PowerMineAgentClient implements ClientModInitializer {
     private JsonObject health(HttpExchange exchange) {
         JsonObject result = ok();
         result.addProperty("name", "power-mine-agent");
-        result.addProperty("version", "0.1.0");
+        result.addProperty("version", "0.2.0");
+        result.addProperty("protocolVersion", "power-mine-agent/v1");
+        result.addProperty("loader", "fabric");
+        result.addProperty("minecraftVersion", "1.20.1");
         result.addProperty("minecraftThread", MinecraftClient.getInstance() != null);
+        return result;
+    }
+
+    private JsonObject bridgeCapabilities() {
+        JsonObject result = ok();
+        result.addProperty("protocolVersion", "power-mine-agent/v1");
+        result.addProperty("agentId", "power-mine-fabric-agent");
+        result.addProperty("agentVersion", "0.2.0");
+        result.addProperty("loader", "fabric");
+        result.addProperty("minecraftVersion", "1.20.1");
+
+        JsonObject capabilities = new JsonObject();
+        capabilities.addProperty("state", true);
+        capabilities.addProperty("inventory", true);
+        capabilities.addProperty("giveItem", true);
+        capabilities.addProperty("selectHotbar", true);
+        capabilities.addProperty("worldSnapshot", true);
+        capabilities.addProperty("screenshot", true);
+        capabilities.addProperty("recipeCheck", true);
+        capabilities.addProperty("craftRecipe", true);
+        capabilities.addProperty("placeBlock", true);
+        capabilities.addProperty("breakBlock", true);
+        capabilities.addProperty("waitTicks", true);
+        capabilities.addProperty("useItem", true);
+        capabilities.addProperty("useBlock", true);
+        capabilities.addProperty("heldItemRender", true);
+        capabilities.addProperty("blockRender", true);
+        capabilities.addProperty("bakedModelIntrospection", true);
+        capabilities.addProperty("cameraLook", true);
+        capabilities.addProperty("pauseOnLostFocusControl", true);
+        capabilities.addProperty("inputRelease", true);
+        capabilities.addProperty("offhand", true);
+        capabilities.addProperty("autoWorldOpen", true);
+        capabilities.addProperty("autoWorldCreate", false);
+        result.add("capabilities", capabilities);
+
+        JsonArray limitations = new JsonArray();
+        limitations.add("World and block mutation endpoints require an integrated singleplayer server.");
+        limitations.add("The agent can open an existing local world from the title screen, but does not create new worlds yet.");
+        limitations.add("The agent disables pause-on-lost-focus for automation sessions and can release the mouse cursor on request.");
+        result.add("limitations", limitations);
         return result;
     }
 
@@ -171,6 +228,63 @@ public final class PowerMineAgentClient implements ClientModInitializer {
         }
         result.add("blocks", blocks);
         return result;
+    }
+
+    private JsonObject openWorld(JsonObject body) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null) {
+            throw new IllegalStateException("Minecraft client is not ready");
+        }
+        disablePauseOnLostFocus(client);
+        String worldName = optionalString(body, "world", optionalString(body, "name", ""));
+        if (worldName.isBlank()) {
+            throw new IllegalArgumentException("missing world name: pass world or name");
+        }
+        boolean create = optionalBool(body, "create", false);
+        if (client.player != null && client.world != null) {
+            JsonObject result = ok();
+            result.addProperty("loaded", true);
+            result.addProperty("alreadyLoaded", true);
+            result.addProperty("world", worldName);
+            return result;
+        }
+        if (create && !client.getLevelStorage().levelExists(worldName)) {
+            throw new IllegalArgumentException("Fabric 1.20.1 agent can open existing worlds, but cannot create new worlds yet: " + worldName);
+        }
+        if (!client.getLevelStorage().levelExists(worldName)) {
+            throw new IllegalArgumentException("world does not exist: " + worldName);
+        }
+        client.createIntegratedServerLoader().start(null, worldName);
+        JsonObject result = ok();
+        result.addProperty("loaded", false);
+        result.addProperty("opening", true);
+        result.addProperty("world", worldName);
+        result.addProperty("create", false);
+        return result;
+    }
+
+    private JsonObject releaseInput() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null) {
+            throw new IllegalStateException("Minecraft client is not ready");
+        }
+        boolean changed = disablePauseOnLostFocus(client);
+        client.mouse.unlockCursor();
+
+        JsonObject result = ok();
+        result.addProperty("pauseOnLostFocus", client.options.pauseOnLostFocus);
+        result.addProperty("pauseOnLostFocusChanged", changed);
+        result.addProperty("mouseReleased", true);
+        return result;
+    }
+
+    private boolean disablePauseOnLostFocus(MinecraftClient client) {
+        if (client == null || client.options == null) {
+            return false;
+        }
+        boolean previous = client.options.pauseOnLostFocus;
+        client.options.pauseOnLostFocus = false;
+        return previous;
     }
 
     private JsonObject heldItemRender(HttpExchange exchange) {
@@ -265,6 +379,71 @@ public final class PowerMineAgentClient implements ClientModInitializer {
         result.addProperty("nonZeroSamples", nonZeroSamples);
         result.addProperty("blankLikely", nonZeroSamples == 0);
         return result;
+    }
+
+    private JsonObject cameraLook(JsonObject body) throws Exception {
+        JsonObject result = clientThread(() -> {
+            MinecraftClient client = requireLoadedClient();
+            boolean hasTarget = body.has("x") || body.has("y") || body.has("z");
+            float yaw;
+            float pitch;
+
+            JsonObject rotation = ok();
+            if (hasTarget) {
+                if (!body.has("x") || !body.has("y") || !body.has("z")) {
+                    throw new IllegalArgumentException("x, y, and z are required when looking at a target");
+                }
+                boolean center = optionalBool(body, "center", true);
+                double targetX = optionalDouble(body, "x", 0.0) + (center ? 0.5 : 0.0);
+                double targetY = optionalDouble(body, "y", 0.0) + (center ? 0.5 : 0.0);
+                double targetZ = optionalDouble(body, "z", 0.0) + (center ? 0.5 : 0.0);
+                Vec3d eye = client.player.getEyePos();
+                double dx = targetX - eye.x;
+                double dy = targetY - eye.y;
+                double dz = targetZ - eye.z;
+                double horizontal = Math.sqrt(dx * dx + dz * dz);
+                yaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+                pitch = (float) (-(Math.atan2(dy, horizontal) * 180.0 / Math.PI));
+
+                JsonObject target = new JsonObject();
+                target.addProperty("x", targetX);
+                target.addProperty("y", targetY);
+                target.addProperty("z", targetZ);
+                target.addProperty("center", center);
+                rotation.add("target", target);
+            } else {
+                if (!body.has("yaw") || !body.has("pitch")) {
+                    throw new IllegalArgumentException("pass either x/y/z target fields or yaw and pitch");
+                }
+                yaw = (float) optionalDouble(body, "yaw", client.player.getYaw());
+                pitch = (float) optionalDouble(body, "pitch", client.player.getPitch());
+            }
+
+            pitch = (float) Math.max(-90.0, Math.min(90.0, pitch));
+            setCameraRotation(client, yaw, pitch);
+            rotation.addProperty("yaw", yaw);
+            rotation.addProperty("pitch", pitch);
+            return rotation;
+        });
+        int delayMs = clamp(optionalInt(body, "delayMs", optionalInt(body, "delay_ms", 0)), 0, 2000);
+        if (delayMs > 0) {
+            Thread.sleep(delayMs);
+        }
+        if (optionalBool(body, "screenshot", false)) {
+            result.add("screenshot", clientThread(this::screenshot));
+        }
+        return result;
+    }
+
+    private void setCameraRotation(MinecraftClient client, float yaw, float pitch) {
+        client.player.setYaw(yaw);
+        client.player.setPitch(pitch);
+        client.player.setHeadYaw(yaw);
+        client.player.bodyYaw = yaw;
+        client.player.prevYaw = yaw;
+        client.player.prevPitch = pitch;
+        client.player.prevHeadYaw = yaw;
+        client.player.prevBodyYaw = yaw;
     }
 
     private JsonObject selectHotbar(JsonObject body) {
@@ -375,6 +554,104 @@ public final class PowerMineAgentClient implements ClientModInitializer {
         });
     }
 
+    private JsonObject waitTicks(JsonObject body) throws Exception {
+        int ticks = clamp(optionalInt(body, "ticks", 20), 0, 1200);
+        int timeoutSeconds = clamp(optionalInt(body, "timeoutSeconds", Math.max(5, (ticks / 20) + 5)), 1, 300);
+        long started = clientWorldTime();
+        long target = started + ticks;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        long current = started;
+        while (ticks > 0 && current < target && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+            current = clientWorldTime();
+        }
+
+        boolean complete = current >= target;
+        JsonObject result = ok();
+        result.addProperty("ok", complete);
+        result.addProperty("ticksRequested", ticks);
+        result.addProperty("timeoutSeconds", timeoutSeconds);
+        result.addProperty("startWorldTime", started);
+        result.addProperty("currentWorldTime", current);
+        result.addProperty("elapsedTicks", current - started);
+        result.addProperty("complete", complete);
+        if (!complete) {
+            result.addProperty("error", "timed out waiting for Minecraft ticks");
+        }
+        return result;
+    }
+
+    private long clientWorldTime() throws Exception {
+        JsonObject result = clientThread(() -> {
+            MinecraftClient client = requireLoadedClient();
+            JsonObject response = ok();
+            response.addProperty("worldTime", client.world.getTime());
+            return response;
+        });
+        return result.get("worldTime").getAsLong();
+    }
+
+    private JsonObject useItem(JsonObject body) {
+        MinecraftClient client = requireLoadedClient();
+        if (client.interactionManager == null) {
+            throw new IllegalStateException("Minecraft interaction manager is not ready");
+        }
+        if (body.has("slot")) {
+            int slot = clamp(optionalInt(body, "slot", client.player.getInventory().selectedSlot), 0, 8);
+            client.player.getInventory().selectedSlot = slot;
+        }
+
+        Hand hand = handFromString(optionalString(body, "hand", "main"));
+        ItemStack before = stackForHand(client, hand).copy();
+        ActionResult action = client.interactionManager.interactItem(client.player, hand);
+        ItemStack after = stackForHand(client, hand).copy();
+
+        JsonObject result = ok();
+        result.addProperty("hand", hand == Hand.OFF_HAND ? "offhand" : "main");
+        result.addProperty("selectedSlot", client.player.getInventory().selectedSlot);
+        result.addProperty("actionResult", action.toString());
+        result.addProperty("accepted", action.isAccepted());
+        result.addProperty("screen", client.currentScreen == null ? "" : client.currentScreen.getClass().getName());
+        result.add("before", stackJson(-1, before, -1));
+        result.add("after", stackJson(-1, after, -1));
+        return result;
+    }
+
+    private JsonObject useBlock(JsonObject body) {
+        MinecraftClient client = requireLoadedClient();
+        if (client.interactionManager == null) {
+            throw new IllegalStateException("Minecraft interaction manager is not ready");
+        }
+        if (body.has("slot")) {
+            int slot = clamp(optionalInt(body, "slot", client.player.getInventory().selectedSlot), 0, 8);
+            client.player.getInventory().selectedSlot = slot;
+        }
+
+        BlockPos pos = requireBlockPos(body);
+        Hand hand = handFromString(optionalString(body, "hand", "main"));
+        Direction side = directionFromString(optionalString(body, "side", "up"));
+        ItemStack beforeStack = stackForHand(client, hand).copy();
+        BlockState beforeBlock = client.world.getBlockState(pos);
+        BlockHitResult hit = new BlockHitResult(Vec3d.ofCenter(pos), side, pos, false);
+        ActionResult action = client.interactionManager.interactBlock(client.player, hand, hit);
+        ItemStack afterStack = stackForHand(client, hand).copy();
+        BlockState afterBlock = client.world.getBlockState(pos);
+
+        JsonObject result = ok();
+        result.add("pos", blockPosJson(pos));
+        result.addProperty("hand", hand == Hand.OFF_HAND ? "offhand" : "main");
+        result.addProperty("side", side.asString());
+        result.addProperty("selectedSlot", client.player.getInventory().selectedSlot);
+        result.addProperty("actionResult", action.toString());
+        result.addProperty("accepted", action.isAccepted());
+        result.addProperty("screen", client.currentScreen == null ? "" : client.currentScreen.getClass().getName());
+        result.add("beforeBlock", blockStateJson(pos, beforeBlock));
+        result.add("afterBlock", blockStateJson(pos, afterBlock));
+        result.add("beforeStack", stackJson(-1, beforeStack, -1));
+        result.add("afterStack", stackJson(-1, afterStack, -1));
+        return result;
+    }
+
     private JsonObject recipeCheck(JsonObject body) throws Exception {
         MinecraftClient client = requireLoadedClient();
         MinecraftServer server = requireIntegratedServer(client);
@@ -424,6 +701,121 @@ public final class PowerMineAgentClient implements ClientModInitializer {
         });
     }
 
+    private JsonObject craftRecipe(JsonObject body) throws Exception {
+        MinecraftClient client = requireLoadedClient();
+        MinecraftServer server = requireIntegratedServer(client);
+        UUID playerUuid = client.player.getUuid();
+        int width = clamp(optionalInt(body, "width", 3), 1, 3);
+        int height = clamp(optionalInt(body, "height", 3), 1, 3);
+        int crafts = clamp(optionalInt(body, "crafts", 1), 1, 64);
+        boolean requireInventory = optionalBool(body, "requireInventory", true);
+        boolean consume = optionalBool(body, "consume", true);
+        boolean insertOutput = optionalBool(body, "insertOutput", true);
+        int outputSlot = optionalInt(body, "outputSlot", -1);
+        boolean replaceOutput = optionalBool(body, "replaceOutput", false);
+        String expectedOutput = optionalString(body, "expectedOutput", "");
+        JsonArray itemSpecs = body.has("items") && body.get("items").isJsonArray() ? body.getAsJsonArray("items") : new JsonArray();
+
+        JsonObject result = serverThread(server, () -> {
+            ServerPlayerEntity player = requireServerPlayer(server, playerUuid);
+            PlayerInventory inventory = player.getInventory();
+            CraftingInventory crafting = new CraftingInventory(player.currentScreenHandler, width, height);
+            JsonArray grid = new JsonArray();
+            for (int index = 0; index < width * height; index++) {
+                ItemStack stack = stackFromGridSpec(itemSpecs.size() > index ? itemSpecs.get(index) : null);
+                crafting.setStack(index, stack);
+                grid.add(stackJson(index, stack, -1));
+            }
+
+            Optional<CraftingRecipe> match = server.getRecipeManager().getFirstMatch(RecipeType.CRAFTING, crafting, player.getWorld());
+            JsonObject response = ok();
+            response.addProperty("width", width);
+            response.addProperty("height", height);
+            response.addProperty("crafts", crafts);
+            response.addProperty("requireInventory", requireInventory);
+            response.addProperty("consume", consume);
+            response.addProperty("insertOutput", insertOutput);
+            response.add("grid", grid);
+            response.addProperty("matched", match.isPresent());
+            if (expectedOutput != null && !expectedOutput.isBlank()) {
+                response.addProperty("expectedOutput", expectedOutput);
+            }
+
+            if (match.isEmpty()) {
+                response.addProperty("ok", false);
+                response.addProperty("crafted", false);
+                response.addProperty("error", "no matching recipe");
+                return response;
+            }
+
+            CraftingRecipe recipe = match.get();
+            ItemStack crafted = recipe.craft(crafting, server.getRegistryManager());
+            if (crafted.isEmpty()) {
+                response.addProperty("ok", false);
+                response.addProperty("crafted", false);
+                response.addProperty("recipeId", recipe.getId().toString());
+                response.addProperty("error", "matched recipe produced an empty output");
+                return response;
+            }
+
+            response.addProperty("recipeId", recipe.getId().toString());
+            response.add("output", stackJson(-1, crafted, -1));
+            if (expectedOutput != null && !expectedOutput.isBlank()) {
+                response.addProperty("expectedOutputMatches", expectedOutput.equals(Registries.ITEM.getId(crafted.getItem()).toString()));
+            }
+
+            Map<String, Integer> required = requiredStacks(crafting, crafts);
+            response.add("requiredItems", stackRequirementJson(required));
+            JsonArray missing = missingItems(inventory, required);
+            response.add("missingItems", missing);
+            boolean availableFromInventory = missing.size() == 0;
+            response.addProperty("availableFromInventory", availableFromInventory);
+            if (requireInventory && !availableFromInventory) {
+                response.addProperty("ok", false);
+                response.addProperty("crafted", false);
+                response.addProperty("error", "missing required ingredients");
+                return response;
+            }
+
+            ItemStack output = crafted.copy();
+            int outputCount = crafted.getCount() * crafts;
+            if (outputCount > output.getMaxCount()) {
+                response.addProperty("ok", false);
+                response.addProperty("crafted", false);
+                response.addProperty("error", "crafted output does not fit in one stack: " + outputCount);
+                return response;
+            }
+            output.setCount(outputCount);
+
+            if (consume && !required.isEmpty()) {
+                JsonArray consumed = new JsonArray();
+                consumeInventory(inventory, required, consumed);
+                response.add("consumedItems", consumed);
+            } else {
+                response.add("consumedItems", new JsonArray());
+            }
+
+            int insertedSlot = -1;
+            if (insertOutput) {
+                insertedSlot = insertInventoryStack(inventory, output, outputSlot, replaceOutput);
+                if (insertedSlot < 0) {
+                    response.addProperty("ok", false);
+                    response.addProperty("crafted", false);
+                    response.addProperty("error", insertedSlot == -2 ? "output slot is not empty" : "no empty inventory slot for crafted output");
+                    return response;
+                }
+            }
+
+            inventory.markDirty();
+            player.currentScreenHandler.sendContentUpdates();
+            response.addProperty("crafted", true);
+            response.addProperty("outputSlot", insertedSlot);
+            response.add("craftedStack", stackJson(insertedSlot, output, inventory.selectedSlot));
+            return response;
+        });
+        return result;
+    }
+
     private JsonObject playerJson(MinecraftClient client) {
         JsonObject player = new JsonObject();
         player.addProperty("name", client.player.getName().getString());
@@ -471,6 +863,13 @@ public final class PowerMineAgentClient implements ClientModInitializer {
         return summary;
     }
 
+    private JsonObject blockStateJson(BlockPos pos, BlockState state) {
+        JsonObject result = blockPosJson(pos);
+        result.addProperty("id", Registries.BLOCK.getId(state.getBlock()).toString());
+        result.addProperty("state", state.toString());
+        return result;
+    }
+
     private JsonObject stackJson(int index, ItemStack stack, int selectedSlot) {
         JsonObject item = new JsonObject();
         item.addProperty("slot", index);
@@ -485,6 +884,43 @@ public final class PowerMineAgentClient implements ClientModInitializer {
             item.addProperty("maxDamage", stack.getMaxDamage());
         }
         return item;
+    }
+
+    private ItemStack stackForHand(MinecraftClient client, Hand hand) {
+        return hand == Hand.OFF_HAND ? client.player.getOffHandStack() : client.player.getMainHandStack();
+    }
+
+    private Hand handFromString(String value) {
+        String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        if (normalized.equals("off") || normalized.equals("offhand") || normalized.equals("off_hand")) {
+            return Hand.OFF_HAND;
+        }
+        return Hand.MAIN_HAND;
+    }
+
+    private Direction directionFromString(String value) {
+        String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        switch (normalized) {
+            case "down":
+            case "0":
+                return Direction.DOWN;
+            case "north":
+            case "2":
+                return Direction.NORTH;
+            case "south":
+            case "3":
+                return Direction.SOUTH;
+            case "west":
+            case "4":
+                return Direction.WEST;
+            case "east":
+            case "5":
+                return Direction.EAST;
+            case "up":
+            case "1":
+            default:
+                return Direction.UP;
+        }
     }
 
     private JsonObject itemRenderJson(MinecraftClient client, ItemStack stack) {
@@ -597,6 +1033,124 @@ public final class PowerMineAgentClient implements ClientModInitializer {
             }
         }
         return true;
+    }
+
+    private Map<String, Integer> requiredStacks(CraftingInventory crafting, int crafts) {
+        Map<String, Integer> required = new HashMap<>();
+        for (int gridIndex = 0; gridIndex < crafting.size(); gridIndex++) {
+            ItemStack stack = crafting.getStack(gridIndex);
+            if (stack.isEmpty()) {
+                continue;
+            }
+            String key = stackKey(stack);
+            required.put(key, required.getOrDefault(key, 0) + (stack.getCount() * crafts));
+        }
+        return required;
+    }
+
+    private Map<String, Integer> inventoryCounts(PlayerInventory inventory) {
+        Map<String, Integer> available = new HashMap<>();
+        int limit = Math.min(36, inventory.size());
+        for (int slot = 0; slot < limit; slot++) {
+            ItemStack stack = inventory.getStack(slot);
+            if (stack.isEmpty()) {
+                continue;
+            }
+            String key = stackKey(stack);
+            available.put(key, available.getOrDefault(key, 0) + stack.getCount());
+        }
+        return available;
+    }
+
+    private JsonArray stackRequirementJson(Map<String, Integer> required) {
+        JsonArray items = new JsonArray();
+        for (Map.Entry<String, Integer> entry : required.entrySet()) {
+            JsonObject item = stackKeyJson(entry.getKey());
+            item.addProperty("count", entry.getValue());
+            items.add(item);
+        }
+        return items;
+    }
+
+    private JsonArray missingItems(PlayerInventory inventory, Map<String, Integer> required) {
+        Map<String, Integer> available = inventoryCounts(inventory);
+        JsonArray missing = new JsonArray();
+        for (Map.Entry<String, Integer> entry : required.entrySet()) {
+            int availableCount = available.getOrDefault(entry.getKey(), 0);
+            if (availableCount >= entry.getValue()) {
+                continue;
+            }
+            JsonObject item = stackKeyJson(entry.getKey());
+            item.addProperty("required", entry.getValue());
+            item.addProperty("available", availableCount);
+            item.addProperty("missing", entry.getValue() - availableCount);
+            missing.add(item);
+        }
+        return missing;
+    }
+
+    private void consumeInventory(PlayerInventory inventory, Map<String, Integer> required, JsonArray consumed) {
+        Map<String, Integer> remaining = new HashMap<>(required);
+        int limit = Math.min(36, inventory.size());
+        for (int slot = 0; slot < limit; slot++) {
+            ItemStack stack = inventory.getStack(slot);
+            if (stack.isEmpty()) {
+                continue;
+            }
+            String key = stackKey(stack);
+            int needed = remaining.getOrDefault(key, 0);
+            if (needed <= 0) {
+                continue;
+            }
+            int taken = Math.min(needed, stack.getCount());
+            JsonObject entry = stackJson(slot, stack.copy(), inventory.selectedSlot);
+            entry.addProperty("consumed", taken);
+            consumed.add(entry);
+            stack.decrement(taken);
+            if (stack.isEmpty()) {
+                inventory.setStack(slot, ItemStack.EMPTY);
+            }
+            int left = needed - taken;
+            if (left <= 0) {
+                remaining.remove(key);
+            } else {
+                remaining.put(key, left);
+            }
+        }
+    }
+
+    private int insertInventoryStack(PlayerInventory inventory, ItemStack output, int outputSlot, boolean replace) {
+        if (outputSlot >= 0) {
+            if (outputSlot >= inventory.size()) {
+                throw new IllegalArgumentException("output slot must be between 0 and " + (inventory.size() - 1));
+            }
+            ItemStack previous = inventory.getStack(outputSlot);
+            if (!replace && !previous.isEmpty()) {
+                return -2;
+            }
+            inventory.setStack(outputSlot, output.copy());
+            return outputSlot;
+        }
+
+        int limit = Math.min(36, inventory.size());
+        for (int slot = 0; slot < limit; slot++) {
+            if (inventory.getStack(slot).isEmpty()) {
+                inventory.setStack(slot, output.copy());
+                return slot;
+            }
+        }
+        return -1;
+    }
+
+    private JsonObject stackKeyJson(String key) {
+        String[] pieces = key.split("\\|", 2);
+        JsonObject item = new JsonObject();
+        item.addProperty("key", key);
+        item.addProperty("id", pieces.length > 0 ? pieces[0] : key);
+        if (pieces.length > 1 && !pieces[1].isBlank()) {
+            item.addProperty("nbt", pieces[1]);
+        }
+        return item;
     }
 
     private String stackKey(ItemStack stack) {
@@ -740,6 +1294,10 @@ public final class PowerMineAgentClient implements ClientModInitializer {
 
     private int optionalInt(JsonObject body, String key, int fallback) {
         return body.has(key) ? body.get(key).getAsInt() : fallback;
+    }
+
+    private double optionalDouble(JsonObject body, String key, double fallback) {
+        return body.has(key) ? body.get(key).getAsDouble() : fallback;
     }
 
     private String optionalString(JsonObject body, String key, String fallback) {

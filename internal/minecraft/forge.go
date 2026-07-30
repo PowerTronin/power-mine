@@ -46,10 +46,7 @@ var forgeInstallerProvider = forgeLikeInstallerProvider{
 	VersionID:        ForgeVersionID,
 	MinecraftVersion: forgeMinecraftVersion,
 	NormalizeLoaderVersion: func(minecraftVersion string, loaderVersion string) string {
-		if !strings.Contains(loaderVersion, "-") {
-			return minecraftVersion + "-" + loaderVersion
-		}
-		return loaderVersion
+		return normalizeForgeLoaderVersion(minecraftVersion, loaderVersion)
 	},
 }
 
@@ -174,7 +171,7 @@ func (s *Service) installForgeLikeLoader(ctx context.Context, profile domain.Pro
 	}
 
 	versionID := provider.VersionID(profile.MinecraftVersion, requestedLoaderVersion)
-	composite := mergeFabricProfile(base, forge, versionID)
+	composite := mergeForgeProfile(base, forge, versionID)
 	normalizeLibraryDownloads(composite.Libraries)
 	if err := s.writeVersionMetadata(versionID, composite); err != nil {
 		return "", err
@@ -187,6 +184,21 @@ func (s *Service) installForgeLikeLoader(ctx context.Context, profile domain.Pro
 		Done:    true,
 	})
 	return loaderVersion, nil
+}
+
+func mergeForgeProfile(base versionMetadata, forge versionMetadata, versionID string) versionMetadata {
+	merged := mergeFabricProfile(base, forge, versionID)
+	merged.Libraries = append(append([]libraryMetadata{}, forge.Libraries...), base.Libraries...)
+	return merged
+}
+
+func normalizeForgeLoaderVersion(minecraftVersion string, loaderVersion string) string {
+	minecraftVersion = strings.TrimSpace(minecraftVersion)
+	loaderVersion = strings.TrimSpace(loaderVersion)
+	if minecraftVersion == "" || loaderVersion == "" || strings.HasPrefix(loaderVersion, minecraftVersion+"-") {
+		return loaderVersion
+	}
+	return minecraftVersion + "-" + loaderVersion
 }
 
 func (s *Service) latestForgeLikeLoaderVersion(ctx context.Context, minecraftVersion string, provider forgeLikeInstallerProvider) (string, error) {

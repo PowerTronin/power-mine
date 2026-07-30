@@ -1,10 +1,11 @@
-import {useEffect, useMemo, useState, type FormEvent} from 'react';
+import {useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode} from 'react';
 import rehypeRaw from 'rehype-raw';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './App.css';
 import {
     AppInfo,
+    ClearLauncherLogs,
     CreateProfile,
     DeleteProfile,
     DeleteModrinthModFiles,
@@ -28,6 +29,9 @@ import {
     ListProfileGameLogs,
     ListProfileMods,
     ListProfiles,
+    ListLauncherLogs,
+    IsLogsWindow,
+    OpenLauncherLogsWindow,
     OpenProfileModsFolder,
     OpenProfileLogsFolder,
     PlanModrinthInstall,
@@ -39,11 +43,13 @@ import {
     ReadProfileGameLog,
     RefreshVersionCatalog,
     RepairProfile,
+    RecordLauncherLog,
     SaveAccount,
     SaveSettings,
     SearchModrinthMods,
     SelectProfile,
     SetProfileModEnabled,
+    StopProfile,
     UpdateModrinthModFile,
     UpdateModrinthModFiles,
     UpdateModrinthModVersionFiles,
@@ -51,7 +57,8 @@ import {
     ValidateJava
 } from "../wailsjs/go/main/App";
 import {domain} from "../wailsjs/go/models";
-import {EventsOn} from "../wailsjs/runtime/runtime";
+import {EventsOn as RuntimeEventsOn} from "../wailsjs/runtime/runtime";
+import logoWhite from './assets/images/pt-logo-fin-white.svg';
 
 type Screen = 'home' | 'library' | 'create' | 'account' | 'logs' | 'settings' | 'browse';
 
@@ -145,7 +152,7 @@ type LauncherLog = {
 
 type LaunchEvent = {
     profileId: string;
-    status: 'starting' | 'running' | 'stopped' | 'failed';
+    status: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed';
     stream?: string;
     message: string;
     exitCode?: number;
@@ -154,7 +161,7 @@ type LaunchEvent = {
 
 type LaunchState = {
     profileId: string;
-    status: 'starting' | 'running' | 'stopped' | 'failed';
+    status: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed';
     message: string;
     exitCode?: number;
     startedAt?: string;
@@ -163,6 +170,286 @@ type LaunchState = {
 
 type LogLevelFilter = 'all' | LauncherLog['level'];
 type LogsMode = 'launcher' | 'game';
+type WindowMode = 'checking' | 'main' | 'logs';
+type HealthTone = 'ok' | 'warn' | 'error' | 'busy' | 'idle';
+
+type LogAppearance = {
+    fontSize: number;
+    timeWidth: number;
+    levelWidth: number;
+    sourceWidth: number;
+    profileWidth: number;
+    consoleBg: string;
+    timeColor: string;
+    levelColor: string;
+    sourceColor: string;
+    profileColor: string;
+    messageColor: string;
+    severityColors: boolean;
+};
+
+type ProfileHealthItem = {
+    key: string;
+    label: string;
+    status: string;
+    detail: string;
+    tone: HealthTone;
+    actionLabel?: string;
+    actionClass?: 'primary' | 'danger';
+    actionDisabled?: boolean;
+    onAction?: () => void;
+};
+
+type ProfileHealthProps = {
+    profile: domain.Profile;
+    progress?: InstallProgress;
+    launch?: LaunchState;
+    javaRuntime?: domain.ProfileJavaRuntime;
+    javaInstallProgress: JavaInstallProgress | null;
+    modList?: domain.ModList;
+    modrinthUpdatePlans: domain.ModrinthUpdatePlan[];
+    onInstall: (id: string) => void;
+    onRepair: (id: string) => void;
+    onInstallJava: (version: number) => void;
+    onStop: (id: string) => void;
+    onBrowseMods: (profileId: string) => void;
+    onOpenLogs: () => void;
+};
+
+type SelectOption = {
+    value: string;
+    label: string;
+    disabled?: boolean;
+};
+
+function onRuntimeEvent<T>(eventName: string, callback: (event: T) => void) {
+    if (typeof globalThis === 'undefined' || !(globalThis as { runtime?: unknown }).runtime) {
+        return () => undefined;
+    }
+    return RuntimeEventsOn(eventName, callback as (...data: unknown[]) => void);
+}
+
+function hasWailsBackend() {
+    return typeof globalThis !== 'undefined'
+        && !!(globalThis as { go?: { main?: { App?: unknown } } }).go?.main?.App;
+}
+
+function launcherLogsFromBackend(logs?: domain.LauncherLog[] | null): LauncherLog[] {
+    return (logs ?? []).map((log) => ({
+        id: log.id,
+        time: log.time,
+        level: launcherLogLevel(log.level),
+        source: log.source,
+        message: log.message,
+        profileId: log.profileId,
+    }));
+}
+
+function launcherLogLevel(level: string): LauncherLog['level'] {
+    if (level === 'error' || level === 'success') {
+        return level;
+    }
+    return 'info';
+}
+
+function loadLogAppearance(): LogAppearance {
+    if (typeof localStorage === 'undefined') {
+        return defaultLogAppearance;
+    }
+    try {
+        const raw = localStorage.getItem(logAppearanceStorageKey);
+        if (!raw) {
+            return defaultLogAppearance;
+        }
+        return sanitizeLogAppearance(JSON.parse(raw));
+    } catch {
+        return defaultLogAppearance;
+    }
+}
+
+function saveLogAppearance(appearance: LogAppearance) {
+    if (typeof localStorage === 'undefined') {
+        return;
+    }
+    localStorage.setItem(logAppearanceStorageKey, JSON.stringify(appearance));
+}
+
+function sanitizeLogAppearance(input: Partial<LogAppearance>): LogAppearance {
+    return {
+        fontSize: clampNumber(input.fontSize, 10, 22, defaultLogAppearance.fontSize),
+        timeWidth: clampNumber(input.timeWidth, 46, 180, defaultLogAppearance.timeWidth),
+        levelWidth: clampNumber(input.levelWidth, 46, 160, defaultLogAppearance.levelWidth),
+        sourceWidth: clampNumber(input.sourceWidth, 60, 260, defaultLogAppearance.sourceWidth),
+        profileWidth: clampNumber(input.profileWidth, 60, 280, defaultLogAppearance.profileWidth),
+        consoleBg: cleanColor(input.consoleBg, defaultLogAppearance.consoleBg),
+        timeColor: cleanColor(input.timeColor, defaultLogAppearance.timeColor),
+        levelColor: cleanColor(input.levelColor, defaultLogAppearance.levelColor),
+        sourceColor: cleanColor(input.sourceColor, defaultLogAppearance.sourceColor),
+        profileColor: cleanColor(input.profileColor, defaultLogAppearance.profileColor),
+        messageColor: cleanColor(input.messageColor, defaultLogAppearance.messageColor),
+        severityColors: input.severityColors ?? defaultLogAppearance.severityColors,
+    };
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+        return fallback;
+    }
+    return Math.min(max, Math.max(min, number));
+}
+
+function cleanColor(value: unknown, fallback: string) {
+    if (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value)) {
+        return fallback;
+    }
+    return value;
+}
+
+function logAppearanceStyle(appearance: LogAppearance): CSSProperties {
+    const style = {
+        '--log-font-size': `${appearance.fontSize}px`,
+        '--log-time-width': `${appearance.timeWidth}px`,
+        '--log-level-width': `${appearance.levelWidth}px`,
+        '--log-source-width': `${appearance.sourceWidth}px`,
+        '--log-profile-width': `${appearance.profileWidth}px`,
+        '--log-console-bg': appearance.consoleBg,
+        '--log-time-color': appearance.timeColor,
+        '--log-source-color': appearance.sourceColor,
+        '--log-profile-color': appearance.profileColor,
+        '--log-message-color': appearance.messageColor,
+    } as CSSProperties & Record<string, string>;
+    if (!appearance.severityColors) {
+        style['--log-level-color'] = appearance.levelColor;
+    }
+    return style;
+}
+
+function CommandSelect({
+    value,
+    options,
+    onChange,
+    disabled = false,
+    ariaLabel
+}: {
+    value: string;
+    options: SelectOption[];
+    onChange: (value: string) => void;
+    disabled?: boolean;
+    ariaLabel?: string;
+}) {
+    const [open, setOpen] = useState(false);
+    const [activeIndex, setActiveIndex] = useState(0);
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+    const selected = options[selectedIndex];
+
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+        function handlePointerDown(event: MouseEvent) {
+            if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+                setOpen(false);
+            }
+        }
+        document.addEventListener('mousedown', handlePointerDown);
+        return () => document.removeEventListener('mousedown', handlePointerDown);
+    }, [open]);
+
+    useEffect(() => {
+        setActiveIndex(selectedIndex);
+    }, [selectedIndex, options.length]);
+
+    function nextEnabledIndex(direction: 1 | -1) {
+        if (options.length === 0) {
+            return 0;
+        }
+        for (let step = 1; step <= options.length; step += 1) {
+            const index = (activeIndex + step * direction + options.length) % options.length;
+            if (!options[index]?.disabled) {
+                return index;
+            }
+        }
+        return activeIndex;
+    }
+
+    function choose(index: number) {
+        const option = options[index];
+        if (!option || option.disabled) {
+            return;
+        }
+        onChange(option.value);
+        setOpen(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex(nextEnabledIndex(1));
+            return;
+        }
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex(nextEnabledIndex(-1));
+            return;
+        }
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            if (open) {
+                choose(activeIndex);
+            } else {
+                setOpen(true);
+            }
+            return;
+        }
+        if (event.key === 'Escape') {
+            setOpen(false);
+        }
+    }
+
+    return (
+        <div className="command-select" ref={rootRef}>
+            <button
+                type="button"
+                className="command-select-trigger"
+                disabled={disabled || options.length === 0}
+                aria-label={ariaLabel}
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                onClick={() => setOpen((current) => !current)}
+                onKeyDown={handleKeyDown}
+            >
+                <span>{selected?.label ?? value ?? 'Select'}</span>
+                <span className="command-select-arrow" aria-hidden="true"/>
+            </button>
+            {open && (
+                <div className="command-select-menu" role="listbox">
+                    {options.map((option, index) => (
+                        <button
+                            key={`${option.value}-${index}`}
+                            type="button"
+                            className={[
+                                'command-select-option',
+                                option.value === value ? 'selected' : '',
+                                index === activeIndex ? 'active' : '',
+                            ].filter(Boolean).join(' ')}
+                            disabled={option.disabled}
+                            role="option"
+                            aria-selected={option.value === value}
+                            onMouseEnter={() => setActiveIndex(index)}
+                            onClick={() => choose(index)}
+                        >
+                            {option.label}
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
 
 const navItems: Array<{ id: Screen; label: string; mark: string }> = [
     {id: 'home', label: 'Home', mark: 'H'},
@@ -190,7 +477,26 @@ const defaultAccount: AccountDraft = {
     offlineUuid: '',
 };
 
+const logAppearanceStorageKey = 'power-mine:log-appearance:v1';
+
+const defaultLogAppearance: LogAppearance = {
+    fontSize: 13,
+    timeWidth: 82,
+    levelWidth: 72,
+    sourceWidth: 112,
+    profileWidth: 150,
+    consoleBg: '#050505',
+    timeColor: '#8f8f8f',
+    levelColor: '#ffffff',
+    sourceColor: '#b8b8b8',
+    profileColor: '#9f9f9f',
+    messageColor: '#d6d6d6',
+    severityColors: true,
+};
+
 function App() {
+    const [windowMode, setWindowMode] = useState<WindowMode>(hasWailsBackend() ? 'checking' : 'main');
+    const [logsFocusMode, setLogsFocusMode] = useState(false);
     const [screen, setScreen] = useState<Screen>('home');
     const [info, setInfo] = useState<domain.AppInfo | null>(null);
     const [settings, setSettings] = useState<SettingsDraft | null>(null);
@@ -265,10 +571,69 @@ function App() {
     const browseProfileForModrinth = browseProfile?.id;
 
     useEffect(() => {
-        refreshApp();
-        refreshVersionOptions();
-        validateJava();
+        if (!hasWailsBackend()) {
+            setWindowMode('main');
+            return;
+        }
+        let cancelled = false;
+        IsLogsWindow()
+            .then((isLogsWindow) => {
+                if (!cancelled) {
+                    setWindowMode(isLogsWindow ? 'logs' : 'main');
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setWindowMode('main');
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
     }, []);
+
+    useEffect(() => {
+        if (!hasWailsBackend() || windowMode !== 'main') {
+            return;
+        }
+        void (async () => {
+            await loadLauncherLogs();
+            refreshApp();
+            refreshVersionOptions();
+            validateJava();
+        })();
+    }, [windowMode]);
+
+    useEffect(() => {
+        if (!hasWailsBackend() || windowMode !== 'logs') {
+            return;
+        }
+        let cancelled = false;
+        async function refreshLogsWindow() {
+            try {
+                const [profileList, logs] = await Promise.all([
+                    ListProfiles(),
+                    ListLauncherLogs(),
+                ]);
+                if (!cancelled) {
+                    setProfiles(profileList.profiles ?? []);
+                    setSelectedProfileId(profileList.selectedProfileId);
+                    setLauncherLogs(launcherLogsFromBackend(logs));
+                    setError('');
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    setError(errorText(err));
+                }
+            }
+        }
+        void refreshLogsWindow();
+        const interval = window.setInterval(refreshLogsWindow, 1000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(interval);
+        };
+    }, [windowMode]);
 
     useEffect(() => {
         if (profiles.length === 0) {
@@ -283,22 +648,25 @@ function App() {
     }, [profiles, selectedProfileId, browseProfileId]);
 
     useEffect(() => {
-        if (browseProfileForModrinth) {
+        if (windowMode === 'main' && browseProfileForModrinth) {
             refreshInstalledModrinthProjects(browseProfileForModrinth);
             refreshModrinthUpdates(browseProfileForModrinth);
         }
-    }, [browseProfileForModrinth]);
+    }, [browseProfileForModrinth, windowMode]);
 
     useEffect(() => {
-        if (selectedProfile?.id) {
+        if (windowMode === 'main' && selectedProfile?.id) {
             refreshProfileJavaRuntime(selectedProfile.id);
             refreshProfileMods(selectedProfile.id);
             refreshModrinthUpdates(selectedProfile.id);
         }
-    }, [selectedProfile?.id, selectedProfile?.minecraftVersion, selectedProfile?.install?.status]);
+    }, [selectedProfile?.id, selectedProfile?.minecraftVersion, selectedProfile?.install?.status, windowMode]);
 
     useEffect(() => {
-        return EventsOn('install:progress', (event: InstallProgress) => {
+        if (windowMode !== 'main') {
+            return;
+        }
+        return onRuntimeEvent<InstallProgress>('install:progress', (event) => {
             if (!event?.profileId) {
                 return;
             }
@@ -316,10 +684,13 @@ function App() {
                 profileId: event.profileId,
             });
         });
-    }, []);
+    }, [windowMode]);
 
     useEffect(() => {
-        return EventsOn('java:progress', (event: JavaInstallProgress) => {
+        if (windowMode !== 'main') {
+            return;
+        }
+        return onRuntimeEvent<JavaInstallProgress>('java:progress', (event) => {
             if (!event) {
                 return;
             }
@@ -333,10 +704,13 @@ function App() {
                 message: javaProgressMessage(event),
             });
         });
-    }, []);
+    }, [windowMode]);
 
     useEffect(() => {
-        return EventsOn('launch:event', (event: LaunchEvent) => {
+        if (windowMode !== 'main') {
+            return;
+        }
+        return onRuntimeEvent<LaunchEvent>('launch:event', (event) => {
             if (!event?.profileId) {
                 return;
             }
@@ -358,7 +732,13 @@ function App() {
                 profileId: event.profileId,
             });
         });
-    }, []);
+    }, [windowMode]);
+
+    useEffect(() => {
+        if (screen !== 'logs' && logsFocusMode) {
+            setLogsFocusMode(false);
+        }
+    }, [screen, logsFocusMode]);
 
     function appendLog(entry: Omit<LauncherLog, 'id' | 'time'>) {
         const next: LauncherLog = {
@@ -367,6 +747,51 @@ function App() {
             time: new Date().toLocaleTimeString(),
         };
         setLauncherLogs((current) => [next, ...current]);
+        if (hasWailsBackend()) {
+            void RecordLauncherLog(next).catch(() => undefined);
+        }
+    }
+
+    async function loadLauncherLogs() {
+        try {
+            const logs = await ListLauncherLogs();
+            setLauncherLogs(launcherLogsFromBackend(logs));
+        } catch {
+            // Launcher log history is non-critical; live events will still appear.
+        }
+    }
+
+    async function openLauncherLogsWindow() {
+        try {
+            setError('');
+            await OpenLauncherLogsWindow();
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Launcher logs',
+                message: `Open logs window failed: ${text}`,
+            });
+        }
+    }
+
+    async function clearLauncherLogs() {
+        setLauncherLogs([]);
+        if (!hasWailsBackend()) {
+            return;
+        }
+        try {
+            await ClearLauncherLogs();
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Launcher logs',
+                message: `Clear logs failed: ${text}`,
+            });
+        }
     }
 
     async function refreshApp() {
@@ -1778,6 +2203,50 @@ function App() {
         }
     }
 
+    async function stopProfile(id: string) {
+        try {
+            setError('');
+            setMessage('');
+            setLaunchStates((current) => ({
+                ...current,
+                [id]: {
+                    ...current[id],
+                    profileId: id,
+                    status: 'stopping',
+                    message: 'Stop requested',
+                },
+            }));
+            appendLog({
+                level: 'info',
+                source: 'Launch',
+                message: 'Stop requested.',
+                profileId: id,
+            });
+            const state = await StopProfile(id);
+            setLaunchStates((current) => ({
+                ...current,
+                [id]: {
+                    ...current[id],
+                    profileId: state.profileId,
+                    status: state.status as LaunchState['status'],
+                    message: state.message,
+                    exitCode: state.exitCode,
+                    startedAt: current[id]?.startedAt ?? state.startedAt,
+                    endedAt: state.endedAt,
+                },
+            }));
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Launch',
+                message: `Stop failed: ${text}`,
+                profileId: id,
+            });
+        }
+    }
+
     async function saveSettings(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
         if (!settings) {
@@ -1832,14 +2301,42 @@ function App() {
         }
     }
 
+    if (windowMode === 'checking') {
+        return (
+            <div className="logs-window-shell loading">
+                <p className="eyebrow">Power Mine</p>
+                <h1>Opening interface</h1>
+            </div>
+        );
+    }
+
+    if (windowMode === 'logs') {
+        return (
+            <LauncherLogsWindow
+                logs={launcherLogs}
+                profiles={profiles}
+                error={error}
+                gameLogLists={profileGameLogLists}
+                gameLogContents={profileGameLogContents}
+                gameLogActionKey={gameLogActionKey}
+                onClearLogs={clearLauncherLogs}
+                onRefreshGameLogs={refreshProfileGameLogs}
+                onReadGameLog={readProfileGameLog}
+                onOpenLogsFolder={openProfileLogsFolder}
+            />
+        );
+    }
+
     return (
-        <div className="app-shell">
+        <div className={screen === 'logs' && logsFocusMode ? 'app-shell logs-focus-active' : 'app-shell'}>
             <aside className="rail">
                 <div className="brand">
-                    <div className="brand-mark">PM</div>
+                    <div className="brand-mark">
+                        <img src={logoWhite} alt="" aria-hidden="true"/>
+                    </div>
                     <div>
                         <strong>{info?.name ?? 'Power Mine'}</strong>
-                        <span>{info?.version ?? '0.1.0'}</span>
+                        <span>version: {info?.version ?? '0.1.0'}</span>
                     </div>
                 </div>
                 <nav className="nav-list" aria-label="Primary navigation">
@@ -1883,6 +2380,8 @@ function App() {
                         installProgress={installProgress}
                         javaInstallProgress={javaInstallProgress}
                         profileJavaRuntimes={profileJavaRuntimes}
+                        modList={selectedModList}
+                        modrinthUpdatePlans={selectedModrinthUpdatePlans}
                         launchStates={launchStates}
                         selectedLogs={selectedLogs}
                         onSelectProfile={selectProfile}
@@ -1890,6 +2389,7 @@ function App() {
                         onRepairProfile={repairProfile}
                         onInstallJava={installJava}
                         onLaunchProfile={launchProfile}
+                        onStopProfile={stopProfile}
                         onOpenBrowse={(profileId) => {
                             setBrowseProfileId(profileId);
                             setScreen('browse');
@@ -1902,6 +2402,7 @@ function App() {
                             setScreen('library');
                         }}
                         onOpenLogs={() => setScreen('logs')}
+                        onOpenLogsWindow={openLauncherLogsWindow}
                     />
                 )}
 
@@ -1938,6 +2439,8 @@ function App() {
                             onRepair={repairProfile}
                             onInstallJava={installJava}
                             onLaunch={launchProfile}
+                            onStop={stopProfile}
+                            onOpenLogs={() => setScreen('logs')}
                             onOpenSettings={openProfileSettings}
                             onCloseSettings={closeProfileSettings}
                             onSettingsDraftChange={setProfileSettingsDraft}
@@ -1991,10 +2494,15 @@ function App() {
                         </label>
                         <label>
                             Minecraft version
-                            <select
+                            <CommandSelect
                                 value={createForm.minecraftVersion}
-                                onChange={(event) => {
-                                    const minecraftVersion = event.target.value;
+                                disabled={minecraftVersions.length === 0}
+                                ariaLabel="Minecraft version"
+                                options={minecraftVersions.map((version) => ({
+                                    value: version.id,
+                                    label: version.label,
+                                }))}
+                                onChange={(minecraftVersion) => {
                                     setCreateForm({
                                         ...createForm,
                                         minecraftVersion,
@@ -2004,48 +2512,42 @@ function App() {
                                         ),
                                     });
                                 }}
-                                disabled={minecraftVersions.length === 0}
-                            >
-                                {minecraftVersions.map((version) => (
-                                    <option key={version.id} value={version.id}>
-                                        {version.label}
-                                    </option>
-                                ))}
-                            </select>
+                            />
                         </label>
                         <label>
                             Loader
-                            <select
+                            <CommandSelect
                                 value={createForm.loaderType}
-                                onChange={(event) => setCreateForm({
+                                ariaLabel="Loader"
+                                options={[
+                                    {value: 'fabric', label: 'Fabric'},
+                                    {value: 'quilt', label: 'Quilt'},
+                                    {value: 'forge', label: 'Forge'},
+                                    {value: 'neoforge', label: 'NeoForge'},
+                                    {value: 'vanilla', label: 'Vanilla'},
+                                ]}
+                                onChange={(loaderType) => setCreateForm({
                                     ...createForm,
-                                    loaderType: event.target.value,
+                                    loaderType,
                                     loaderVersion: pickCurrentValue(
                                         createForm.loaderVersion || 'latest',
-                                        loaderVersionOptions(event.target.value, fabricLoaderVersions, quiltLoaderVersions, forgeLoaderVersions, neoForgeLoaderVersions, createForm.minecraftVersion)
+                                        loaderVersionOptions(loaderType, fabricLoaderVersions, quiltLoaderVersions, forgeLoaderVersions, neoForgeLoaderVersions, createForm.minecraftVersion)
                                     ),
                                 })}
-                            >
-                                <option value="fabric">Fabric</option>
-                                <option value="quilt">Quilt</option>
-                                <option value="forge">Forge</option>
-                                <option value="neoforge">NeoForge</option>
-                                <option value="vanilla">Vanilla</option>
-                            </select>
+                            />
                         </label>
                         {createForm.loaderType !== 'vanilla' && (
                             <label>
                                 Loader version
-                                <select
+                                <CommandSelect
                                     value={createForm.loaderVersion}
-                                    onChange={(event) => setCreateForm({...createForm, loaderVersion: event.target.value})}
-                                >
-                                    {loaderVersionOptions(createForm.loaderType, fabricLoaderVersions, quiltLoaderVersions, forgeLoaderVersions, neoForgeLoaderVersions, createForm.minecraftVersion).map((version) => (
-                                        <option key={version.id} value={version.id}>
-                                            {version.label}
-                                        </option>
-                                    ))}
-                                </select>
+                                    ariaLabel="Loader version"
+                                    options={loaderVersionOptions(createForm.loaderType, fabricLoaderVersions, quiltLoaderVersions, forgeLoaderVersions, neoForgeLoaderVersions, createForm.minecraftVersion).map((version) => ({
+                                        value: version.id,
+                                        label: version.label,
+                                    }))}
+                                    onChange={(loaderVersion) => setCreateForm({...createForm, loaderVersion})}
+                                />
                             </label>
                         )}
                         <label className="wide">
@@ -2093,12 +2595,12 @@ function App() {
                         </div>
                         <label>
                             Account mode
-                            <select
+                            <CommandSelect
                                 value={account.mode}
-                                onChange={(event) => setAccount({...account, mode: event.target.value})}
-                            >
-                                <option value="offline">Offline profile</option>
-                            </select>
+                                ariaLabel="Account mode"
+                                options={[{value: 'offline', label: 'Offline profile'}]}
+                                onChange={(mode) => setAccount({...account, mode})}
+                            />
                         </label>
                         <label>
                             Offline player name
@@ -2127,10 +2629,12 @@ function App() {
                         gameLogLists={profileGameLogLists}
                         gameLogContents={profileGameLogContents}
                         gameLogActionKey={gameLogActionKey}
-                        onClearLogs={() => setLauncherLogs([])}
+                        onClearLogs={clearLauncherLogs}
                         onRefreshGameLogs={refreshProfileGameLogs}
                         onReadGameLog={readProfileGameLog}
                         onOpenLogsFolder={openProfileLogsFolder}
+                        onOpenLogsWindow={openLauncherLogsWindow}
+                        onFocusModeChange={setLogsFocusMode}
                     />
                 )}
 
@@ -2273,6 +2777,59 @@ function App() {
     );
 }
 
+function LauncherLogsWindow({
+    logs,
+    profiles,
+    error,
+    gameLogLists,
+    gameLogContents,
+    gameLogActionKey,
+    onClearLogs,
+    onRefreshGameLogs,
+    onReadGameLog,
+    onOpenLogsFolder
+}: {
+    logs: LauncherLog[];
+    profiles: domain.Profile[];
+    error: string;
+    gameLogLists: Record<string, domain.GameLogList>;
+    gameLogContents: Record<string, domain.GameLogContent>;
+    gameLogActionKey: string;
+    onClearLogs: () => void;
+    onRefreshGameLogs: (profileId: string) => void;
+    onReadGameLog: (profileId: string, fileName: string) => void;
+    onOpenLogsFolder: (profileId: string) => void;
+}) {
+    const [focusMode, setFocusMode] = useState(false);
+
+    return (
+        <div className={focusMode ? 'logs-window-shell logs-window-focus' : 'logs-window-shell'}>
+            {!focusMode && (
+                <header className="logs-window-header">
+                    <div>
+                        <p className="eyebrow">Power Mine Logs</p>
+                        <h1>Live log console</h1>
+                        <p>{logs.length} launcher events / {profiles.length} installations</p>
+                    </div>
+                </header>
+            )}
+            {error && !focusMode && <div className="banner error">{error}</div>}
+            <ClassicLogsPanel
+                logs={logs}
+                profiles={profiles}
+                gameLogLists={gameLogLists}
+                gameLogContents={gameLogContents}
+                gameLogActionKey={gameLogActionKey}
+                onClearLogs={onClearLogs}
+                onRefreshGameLogs={onRefreshGameLogs}
+                onReadGameLog={onReadGameLog}
+                onOpenLogsFolder={onOpenLogsFolder}
+                onFocusModeChange={setFocusMode}
+            />
+        </div>
+    );
+}
+
 function HomePanel({
     profiles,
     selectedProfile,
@@ -2283,6 +2840,8 @@ function HomePanel({
     installProgress,
     javaInstallProgress,
     profileJavaRuntimes,
+    modList,
+    modrinthUpdatePlans,
     launchStates,
     selectedLogs,
     onSelectProfile,
@@ -2290,10 +2849,12 @@ function HomePanel({
     onRepairProfile,
     onInstallJava,
     onLaunchProfile,
+    onStopProfile,
     onOpenBrowse,
     onOpenCreate,
     onOpenLibrary,
-    onOpenLogs
+    onOpenLogs,
+    onOpenLogsWindow
 }: {
     profiles: domain.Profile[];
     selectedProfile?: domain.Profile;
@@ -2304,6 +2865,8 @@ function HomePanel({
     installProgress: Record<string, InstallProgress>;
     javaInstallProgress: JavaInstallProgress | null;
     profileJavaRuntimes: Record<string, domain.ProfileJavaRuntime>;
+    modList?: domain.ModList;
+    modrinthUpdatePlans: domain.ModrinthUpdatePlan[];
     launchStates: Record<string, LaunchState>;
     selectedLogs: LauncherLog[];
     onSelectProfile: (id: string) => void;
@@ -2311,10 +2874,12 @@ function HomePanel({
     onRepairProfile: (id: string) => void;
     onInstallJava: (version: number) => void;
     onLaunchProfile: (id: string) => void;
+    onStopProfile: (id: string) => void;
     onOpenBrowse: (profileId: string) => void;
     onOpenCreate: () => void;
     onOpenLibrary: (profile?: domain.Profile) => void;
     onOpenLogs: () => void;
+    onOpenLogsWindow: () => void;
 }) {
     const selectedProgress = selectedProfile ? installProgress[selectedProfile.id] : undefined;
     const selectedLaunch = selectedProfile ? launchStates[selectedProfile.id] : undefined;
@@ -2323,15 +2888,38 @@ function HomePanel({
     const selectedInstalling = selectedProfile ? isInstalling(selectedProfile, installProgress) : false;
     const selectedInstallVisible = selectedProfile ? shouldShowInstallButton(selectedProfile, installProgress[selectedProfile.id]) : false;
     const selectedRepairVisible = selectedProfile ? shouldShowRepairButton(selectedProfile, installProgress[selectedProfile.id]) : false;
+    const selectedStopVisible = shouldShowStopButton(selectedLaunch);
     const javaRequired = selectedJavaRuntime && !selectedJavaRuntime.installed;
     const javaBusy = isJavaInstalling(javaInstallProgress);
     const installedCount = profiles.filter((profile) => profile.install?.status === 'installed').length;
-    const runningCount = Object.values(launchStates).filter((launch) => launch.status === 'running' || launch.status === 'starting').length;
+    const runningCount = Object.values(launchStates).filter((launch) => isLaunchActive(launch)).length;
     const readyCount = profiles.filter((profile) => !playDisabledReason(
         profile,
         launchStates[profile.id],
         profileJavaRuntimes[profile.id]
     )).length;
+    const [healthReviewOpen, setHealthReviewOpen] = useState(false);
+    const [logReviewOpen, setLogReviewOpen] = useState(false);
+    const healthProps: ProfileHealthProps | null = selectedProfile ? {
+        profile: selectedProfile,
+        progress: selectedProgress,
+        launch: selectedLaunch,
+        javaRuntime: selectedJavaRuntime,
+        javaInstallProgress,
+        modList,
+        modrinthUpdatePlans,
+        onInstall: onInstallProfile,
+        onRepair: onRepairProfile,
+        onInstallJava,
+        onStop: onStopProfile,
+        onBrowseMods: onOpenBrowse,
+        onOpenLogs,
+    } : null;
+
+    useEffect(() => {
+        setHealthReviewOpen(false);
+        setLogReviewOpen(false);
+    }, [selectedProfile?.id]);
 
     return (
         <section className="home-grid">
@@ -2343,16 +2931,15 @@ function HomePanel({
                     {profiles.length > 0 && (
                         <label className="launch-profile-select">
                             Installation
-                            <select
+                            <CommandSelect
                                 value={selectedProfile?.id ?? selectedProfileId}
-                                onChange={(event) => onSelectProfile(event.target.value)}
-                            >
-                                {profiles.map((profile) => (
-                                    <option key={profile.id} value={profile.id}>
-                                        {profile.name} - {profileSubtitle(profile)}
-                                    </option>
-                                ))}
-                            </select>
+                                ariaLabel="Installation"
+                                options={profiles.map((profile) => ({
+                                    value: profile.id,
+                                    label: `${profile.name} - ${profileSubtitle(profile)}`,
+                                }))}
+                                onChange={onSelectProfile}
+                            />
                         </label>
                     )}
                 </div>
@@ -2365,8 +2952,18 @@ function HomePanel({
                                 disabled={!!selectedPlayReason}
                                 onClick={() => onLaunchProfile(selectedProfile.id)}
                             >
-                                {selectedLaunch?.status === 'running' || selectedLaunch?.status === 'starting' ? 'Running' : 'Play'}
+                                {launchActionLabel(selectedLaunch)}
                             </button>
+                            {selectedStopVisible && (
+                                <button
+                                    className="danger"
+                                    type="button"
+                                    disabled={selectedLaunch?.status === 'stopping'}
+                                    onClick={() => onStopProfile(selectedProfile.id)}
+                                >
+                                    {selectedLaunch?.status === 'stopping' ? 'Stopping' : 'Stop'}
+                                </button>
+                            )}
                             {selectedInstallVisible && (
                                 <button
                                     type="button"
@@ -2416,13 +3013,29 @@ function HomePanel({
 
             {selectedProfile ? (
                 <div className="home-secondary">
-                    <ProfileStatusPanel
-                        profile={selectedProfile}
-                        progress={selectedProgress}
-                        launch={selectedLaunch}
-                        javaRuntime={selectedJavaRuntime}
+                    {healthProps && (
+                        <ProfileHealthReviewCard
+                            {...healthProps}
+                            onReview={() => setHealthReviewOpen(true)}
+                        />
+                    )}
+                    <LauncherLogReviewCard
+                        logs={selectedLogs}
+                        onReview={() => setLogReviewOpen(true)}
                     />
-                    <LauncherLogPanel logs={selectedLogs.slice(0, 7)} compact onOpenLogs={onOpenLogs}/>
+                    {healthReviewOpen && healthProps && (
+                        <ProfileHealthReviewModal
+                            {...healthProps}
+                            onClose={() => setHealthReviewOpen(false)}
+                        />
+                    )}
+                    {logReviewOpen && (
+                        <LauncherLogReviewModal
+                            logs={selectedLogs}
+                            onOpenLogs={onOpenLogsWindow}
+                            onClose={() => setLogReviewOpen(false)}
+                        />
+                    )}
                 </div>
             ) : (
                 <EmptyState title="No profiles" action="Create an installation to start playing."/>
@@ -2439,6 +3052,7 @@ function HomePanel({
                     onInstallProfile={onInstallProfile}
                     onRepairProfile={onRepairProfile}
                     onLaunchProfile={onLaunchProfile}
+                    onStopProfile={onStopProfile}
                     onOpenLibrary={onOpenLibrary}
                 />
             )}
@@ -2456,6 +3070,7 @@ function HomeInstallationsPanel({
     onInstallProfile,
     onRepairProfile,
     onLaunchProfile,
+    onStopProfile,
     onOpenLibrary
 }: {
     profiles: domain.Profile[];
@@ -2467,6 +3082,7 @@ function HomeInstallationsPanel({
     onInstallProfile: (id: string) => void;
     onRepairProfile: (id: string) => void;
     onLaunchProfile: (id: string) => void;
+    onStopProfile: (id: string) => void;
     onOpenLibrary: (profile?: domain.Profile) => void;
 }) {
     return (
@@ -2486,6 +3102,7 @@ function HomeInstallationsPanel({
                     const installing = isInstalling(profile, installProgress);
                     const installVisible = shouldShowInstallButton(profile, progress);
                     const repairVisible = shouldShowRepairButton(profile, progress);
+                    const stopVisible = shouldShowStopButton(launch);
                     const active = profile.id === selectedProfileId;
 
                     return (
@@ -2514,8 +3131,13 @@ function HomeInstallationsPanel({
                                     </button>
                                 )}
                                 <button className="small primary" type="button" disabled={!!playReason} onClick={() => onLaunchProfile(profile.id)}>
-                                    {launch?.status === 'running' || launch?.status === 'starting' ? 'Running' : 'Play'}
+                                    {launchActionLabel(launch)}
                                 </button>
+                                {stopVisible && (
+                                    <button className="small danger" type="button" disabled={launch?.status === 'stopping'} onClick={() => onStopProfile(profile.id)}>
+                                        {launch?.status === 'stopping' ? 'Stopping' : 'Stop'}
+                                    </button>
+                                )}
                                 <button className="small" type="button" onClick={() => onOpenLibrary(profile)}>Settings</button>
                             </div>
                         </article>
@@ -2542,6 +3164,8 @@ function ProfileDetail({
     onRepair,
     onInstallJava,
     onLaunch,
+    onStop,
+    onOpenLogs,
     onOpenSettings,
     onCloseSettings,
     onSettingsDraftChange,
@@ -2573,6 +3197,8 @@ function ProfileDetail({
     onRepair: (id: string) => void;
     onInstallJava: (version: number) => void;
     onLaunch: (id: string) => void;
+    onStop: (id: string) => void;
+    onOpenLogs: () => void;
     onOpenSettings: (profile: domain.Profile) => void;
     onCloseSettings: () => void;
     onSettingsDraftChange: (draft: ProfileSettingsDraft) => void;
@@ -2589,6 +3215,12 @@ function ProfileDetail({
     onBulkToggleMods: (profileId: string, fileNames: string[], enabled: boolean) => void;
     onDeleteMod: (profileId: string, fileName: string) => void;
 }) {
+    const [healthReviewOpen, setHealthReviewOpen] = useState(false);
+
+    useEffect(() => {
+        setHealthReviewOpen(false);
+    }, [profile?.id]);
+
     if (!profile) {
         return <EmptyState title="Select a profile" action="No profile selected."/>;
     }
@@ -2597,7 +3229,22 @@ function ProfileDetail({
     const installVisible = shouldShowInstallButton(profile, progress);
     const repairVisible = shouldShowRepairButton(profile, progress);
     const playReason = playDisabledReason(profile, launch, javaRuntime);
-    const showJavaNotice = shouldShowJavaRuntimeNotice(javaRuntime, javaInstallProgress);
+    const stopVisible = shouldShowStopButton(launch);
+    const healthProps: ProfileHealthProps = {
+        profile,
+        progress,
+        launch,
+        javaRuntime,
+        javaInstallProgress,
+        modList,
+        modrinthUpdatePlans,
+        onInstall,
+        onRepair,
+        onInstallJava,
+        onStop,
+        onBrowseMods: (profileId) => onBrowseMod(profileId, '', ''),
+        onOpenLogs,
+    };
 
     return (
         <section className="profile-detail">
@@ -2616,11 +3263,14 @@ function ProfileDetail({
                 </div>
                 <ProgressBar progress={progress}/>
             </div>
-            {showJavaNotice && (
-                <JavaRuntimePanel
-                    runtime={javaRuntime}
-                    progress={javaInstallProgress}
-                    onInstallJava={onInstallJava}
+            <ProfileHealthReviewCard
+                {...healthProps}
+                onReview={() => setHealthReviewOpen(true)}
+            />
+            {healthReviewOpen && (
+                <ProfileHealthReviewModal
+                    {...healthProps}
+                    onClose={() => setHealthReviewOpen(false)}
                 />
             )}
             <dl className="detail-grid compact">
@@ -2640,8 +3290,18 @@ function ProfileDetail({
                     disabled={!!playReason}
                     onClick={() => onLaunch(profile.id)}
                 >
-                    {launch?.status === 'running' || launch?.status === 'starting' ? 'Running' : 'Play'}
+                    {launchActionLabel(launch)}
                 </button>
+                {stopVisible && (
+                    <button
+                        className="danger"
+                        type="button"
+                        disabled={launch?.status === 'stopping'}
+                        onClick={() => onStop(profile.id)}
+                    >
+                        {launch?.status === 'stopping' ? 'Stopping' : 'Stop'}
+                    </button>
+                )}
                 {installVisible && (
                     <button type="button" disabled={installing} onClick={() => onInstall(profile.id)}>
                         {installing ? 'Installing' : 'Install'}
@@ -2662,29 +3322,31 @@ function ProfileDetail({
                 {playReason && <p className="action-hint">{playReason}</p>}
             </div>
             {settingsOpen && settingsDraft && (
-                <ProfileSettingsPanel
-                    profile={profile}
-                    draft={settingsDraft}
-                    javaRuntime={javaRuntime}
-                    javaInstallProgress={javaInstallProgress}
-                    modList={modList}
-                    modrinthUpdatePlans={modrinthUpdatePlans}
-                    modActionKey={modActionKey}
-                    onDraftChange={onSettingsDraftChange}
-                    onInstallJava={onInstallJava}
-                    onSave={onSaveSettings}
-                    onRefreshMods={onRefreshMods}
-                    onImportMod={onImportMod}
-                    onExportModpack={onExportModpack}
-                    onOpenModsFolder={onOpenModsFolder}
-                    onCheckModrinthUpdates={onCheckModrinthUpdates}
-                    onUpdateModrinthProject={onUpdateModrinthProject}
-                    onUpdateModrinthFile={onUpdateModrinthFile}
-                    onBrowseMod={onBrowseMod}
-                    onToggleMod={onToggleMod}
-                    onBulkToggleMods={onBulkToggleMods}
-                    onDeleteMod={onDeleteMod}
-                />
+                <ProfileSettingsReviewModal onClose={onCloseSettings}>
+                    <ProfileSettingsPanel
+                        profile={profile}
+                        draft={settingsDraft}
+                        javaRuntime={javaRuntime}
+                        javaInstallProgress={javaInstallProgress}
+                        modList={modList}
+                        modrinthUpdatePlans={modrinthUpdatePlans}
+                        modActionKey={modActionKey}
+                        onDraftChange={onSettingsDraftChange}
+                        onInstallJava={onInstallJava}
+                        onSave={onSaveSettings}
+                        onRefreshMods={onRefreshMods}
+                        onImportMod={onImportMod}
+                        onExportModpack={onExportModpack}
+                        onOpenModsFolder={onOpenModsFolder}
+                        onCheckModrinthUpdates={onCheckModrinthUpdates}
+                        onUpdateModrinthProject={onUpdateModrinthProject}
+                        onUpdateModrinthFile={onUpdateModrinthFile}
+                        onBrowseMod={onBrowseMod}
+                        onToggleMod={onToggleMod}
+                        onBulkToggleMods={onBulkToggleMods}
+                        onDeleteMod={onDeleteMod}
+                    />
+                </ProfileSettingsReviewModal>
             )}
         </section>
     );
@@ -2761,18 +3423,18 @@ function BrowsePanel({
                 </div>
                 <label className="browse-profile-picker">
                     Installation
-                    <select
+                    <CommandSelect
                         value={profile?.id ?? ''}
                         disabled={loading || !!installingProjectId || !!deletingProjectId}
-                        onChange={(event) => onProfileChange(event.target.value)}
-                    >
-                        {profiles.length === 0 && <option value="">No profiles</option>}
-                        {profiles.map((option) => (
-                            <option key={option.id} value={option.id}>
-                                {option.name} - {profileSubtitle(option)}
-                            </option>
-                        ))}
-                    </select>
+                        ariaLabel="Browse installation"
+                        options={profiles.length === 0
+                            ? [{value: '', label: 'No profiles'}]
+                            : profiles.map((option) => ({
+                                value: option.id,
+                                label: `${option.name} - ${profileSubtitle(option)}`,
+                            }))}
+                        onChange={onProfileChange}
+                    />
                 </label>
                 <div className="browse-controls">
                     <input
@@ -3845,31 +4507,127 @@ function JavaRuntimePanel({
     );
 }
 
-function ProfileStatusPanel({
+function profileHealthView({
     profile,
     progress,
     launch,
-    javaRuntime
-}: {
-    profile: domain.Profile;
-    progress?: InstallProgress;
-    launch?: LaunchState;
-    javaRuntime?: domain.ProfileJavaRuntime;
-}) {
-    const playReason = playDisabledReason(profile, launch, javaRuntime);
+    javaRuntime,
+    javaInstallProgress,
+    modList,
+    modrinthUpdatePlans,
+    onInstall,
+    onRepair,
+    onInstallJava,
+    onStop,
+    onBrowseMods,
+    onOpenLogs
+}: ProfileHealthProps) {
+    const items = profileHealthItems({
+        profile,
+        progress,
+        launch,
+        javaRuntime,
+        javaInstallProgress,
+        modList,
+        modrinthUpdatePlans,
+        onInstall,
+        onRepair,
+        onInstallJava,
+        onStop,
+        onBrowseMods,
+        onOpenLogs,
+    });
+    const summary = profileHealthSummary(items, playDisabledReason(profile, launch, javaRuntime), launch);
+    return {items, summary};
+}
+
+function ProfileHealthReviewCard(props: ProfileHealthProps & { onReview: () => void }) {
+    const {summary, items} = profileHealthView(props);
+    const actionCount = items.filter((item) => item.actionLabel).length;
 
     return (
-        <section className="install-status dashboard-panel">
-            <div>
-                <span>Profile status</span>
-                <strong>{installStatusText(profile)}</strong>
-                <p>{progress ? progressMessage(progress) : profile.install?.message || 'No active install.'}</p>
-                <p>{launch ? launchStatusText(launch) : 'Not running.'}</p>
-                {playReason && <p>{playReason}</p>}
-                <p>{javaRuntimeText(javaRuntime)}</p>
-                {profile.install?.lastError && <p>{profile.install.lastError}</p>}
+        <section className="profile-health-review dashboard-panel">
+            <div className="panel-heading">
+                <div>
+                    <p className="eyebrow">Profile health</p>
+                    <h2>{summary.title}</h2>
+                    <p className="muted">{summary.detail}</p>
+                </div>
+                <span className={`health-badge ${summary.tone}`}>{summary.label}</span>
             </div>
-            <ProgressBar progress={progress}/>
+            <div className="health-review-footer">
+                <span>{items.length} checks{actionCount > 0 ? ` / ${actionCount} actions` : ''}</span>
+                <button className="primary" type="button" onClick={props.onReview}>Review</button>
+            </div>
+        </section>
+    );
+}
+
+function ProfileHealthReviewModal(props: ProfileHealthProps & { onClose: () => void }) {
+    useEffect(() => {
+        function handleKeyDown(event: Event) {
+            if ((event as globalThis.KeyboardEvent).key === 'Escape') {
+                props.onClose();
+            }
+        }
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [props.onClose]);
+
+    return (
+        <div className="modal-backdrop profile-health-backdrop" role="presentation" onMouseDown={props.onClose}>
+            <div role="presentation" onMouseDown={(event) => event.stopPropagation()}>
+                <ProfileHealthPanel {...props} modal onClose={props.onClose}/>
+            </div>
+        </div>
+    );
+}
+
+function ProfileHealthPanel(props: ProfileHealthProps & { modal?: boolean; onClose?: () => void }) {
+    const {progress, modal = false, onClose} = props;
+    const {items, summary} = profileHealthView(props);
+
+    return (
+        <section
+            className={modal ? 'profile-health dashboard-panel profile-health-window' : 'profile-health dashboard-panel'}
+            role={modal ? 'dialog' : undefined}
+            aria-modal={modal ? true : undefined}
+            aria-labelledby={modal ? 'profile-health-review-title' : undefined}
+        >
+            <div className="panel-heading">
+                <div>
+                    <p className="eyebrow">Profile health</p>
+                    <h2 id={modal ? 'profile-health-review-title' : undefined}>{summary.title}</h2>
+                    <p className="muted">{summary.detail}</p>
+                </div>
+                <div className="health-heading-actions">
+                    <span className={`health-badge ${summary.tone}`}>{summary.label}</span>
+                    {onClose && <button className="small" type="button" onClick={onClose}>Close</button>}
+                </div>
+            </div>
+            {progress && <ProgressBar progress={progress}/>}
+            <div className="health-list">
+                {items.map((item) => (
+                    <article key={item.key} className={`health-row ${item.tone}`}>
+                        <span className="health-dot" aria-hidden="true"/>
+                        <div className="health-main">
+                            <strong>{item.label}</strong>
+                            <span>{item.status}</span>
+                            <p>{item.detail}</p>
+                        </div>
+                        {item.actionLabel && item.onAction && (
+                            <button
+                                className={item.actionClass ? `small ${item.actionClass}` : 'small'}
+                                type="button"
+                                disabled={item.actionDisabled}
+                                onClick={item.onAction}
+                            >
+                                {item.actionLabel}
+                            </button>
+                        )}
+                    </article>
+                ))}
+            </div>
         </section>
     );
 }
@@ -3892,12 +4650,14 @@ function LauncherLogPanel({
     logs,
     compact = false,
     detailed = false,
-    onOpenLogs
+    onOpenLogs,
+    openLabel = 'Open logs'
 }: {
     logs: LauncherLog[];
     compact?: boolean;
     detailed?: boolean;
     onOpenLogs?: () => void;
+    openLabel?: string;
 }) {
     return (
         <section className={compact ? 'log-panel compact' : 'log-panel'}>
@@ -3907,7 +4667,7 @@ function LauncherLogPanel({
                     <h2>{detailed ? 'Event stream' : 'Recent events'}</h2>
                 </div>
                 {onOpenLogs && (
-                    <button className="small" type="button" onClick={onOpenLogs}>Open logs</button>
+                    <button className="small" type="button" onClick={onOpenLogs}>{openLabel}</button>
                 )}
             </div>
             {logs.length === 0 ? (
@@ -3927,6 +4687,106 @@ function LauncherLogPanel({
     );
 }
 
+function LauncherLogReviewCard({
+    logs,
+    onReview
+}: {
+    logs: LauncherLog[];
+    onReview: () => void;
+}) {
+    const latest = logs[0];
+    const errorCount = logs.filter((log) => log.level === 'error').length;
+
+    return (
+        <section className="log-review dashboard-panel">
+            <div className="panel-heading">
+                <div>
+                    <p className="eyebrow">Launcher logs</p>
+                    <h2>Recent events</h2>
+                    <p className="muted">{latest ? latest.message : 'No launcher events yet.'}</p>
+                </div>
+                <span className={errorCount > 0 ? 'health-badge error' : 'health-badge idle'}>
+                    {logs.length} events
+                </span>
+            </div>
+            <div className="health-review-footer">
+                <span>{errorCount > 0 ? `${errorCount} errors` : 'stream idle'}</span>
+                <button className="primary" type="button" onClick={onReview}>Review</button>
+            </div>
+        </section>
+    );
+}
+
+function LauncherLogReviewModal({
+    logs,
+    onOpenLogs,
+    onClose
+}: {
+    logs: LauncherLog[];
+    onOpenLogs: () => void;
+    onClose: () => void;
+}) {
+    useEffect(() => {
+        function handleKeyDown(event: Event) {
+            if ((event as globalThis.KeyboardEvent).key === 'Escape') {
+                onClose();
+            }
+        }
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [onClose]);
+
+    return (
+        <div className="modal-backdrop profile-health-backdrop" role="presentation" onMouseDown={onClose}>
+            <div className="launcher-log-window" role="presentation" onMouseDown={(event) => event.stopPropagation()}>
+                <LauncherLogPanel logs={logs} detailed onOpenLogs={onOpenLogs} openLabel="Open window"/>
+                <div className="modal-window-actions">
+                    <button className="small" type="button" onClick={onClose}>Close</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ProfileSettingsReviewModal({
+    children,
+    onClose
+}: {
+    children: ReactNode;
+    onClose: () => void;
+}) {
+    useEffect(() => {
+        function handleKeyDown(event: Event) {
+            if ((event as globalThis.KeyboardEvent).key === 'Escape') {
+                onClose();
+            }
+        }
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [onClose]);
+
+    return (
+        <div className="modal-backdrop profile-health-backdrop" role="presentation" onMouseDown={onClose}>
+            <section
+                className="profile-settings-window"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="profile-settings-review-title"
+                onMouseDown={(event) => event.stopPropagation()}
+            >
+                <div className="settings-window-header">
+                    <div>
+                        <p className="eyebrow">Profile settings</p>
+                        <h2 id="profile-settings-review-title">Settings review</h2>
+                    </div>
+                    <button className="small" type="button" onClick={onClose}>Close</button>
+                </div>
+                {children}
+            </section>
+        </div>
+    );
+}
+
 function ClassicLogsPanel({
     logs,
     profiles,
@@ -3936,7 +4796,9 @@ function ClassicLogsPanel({
     onClearLogs,
     onRefreshGameLogs,
     onReadGameLog,
-    onOpenLogsFolder
+    onOpenLogsFolder,
+    onOpenLogsWindow,
+    onFocusModeChange
 }: {
     logs: LauncherLog[];
     profiles: domain.Profile[];
@@ -3947,8 +4809,13 @@ function ClassicLogsPanel({
     onRefreshGameLogs: (profileId: string) => void;
     onReadGameLog: (profileId: string, fileName: string) => void;
     onOpenLogsFolder: (profileId: string) => void;
+    onOpenLogsWindow?: () => void;
+    onFocusModeChange?: (focused: boolean) => void;
 }) {
     const [mode, setMode] = useState<LogsMode>('launcher');
+    const [focusMode, setFocusMode] = useState(false);
+    const [appearanceOpen, setAppearanceOpen] = useState(false);
+    const [appearance, setAppearance] = useState<LogAppearance>(() => loadLogAppearance());
     const [profileFilter, setProfileFilter] = useState('all');
     const [levelFilter, setLevelFilter] = useState<LogLevelFilter>('all');
     const [sourceFilter, setSourceFilter] = useState('all');
@@ -4051,6 +4918,29 @@ function ClassicLogsPanel({
     const consoleLogs = useMemo(() => [...filteredLogs].reverse(), [filteredLogs]);
     const errorCount = filteredLogs.filter((log) => log.level === 'error').length;
     const selectedSourceLabel = sourceFilter === 'all' ? 'All sources' : sourceFilter;
+    const appearanceStyle = useMemo(() => logAppearanceStyle(appearance), [appearance]);
+
+    useEffect(() => {
+        saveLogAppearance(appearance);
+    }, [appearance]);
+
+    useEffect(() => {
+        onFocusModeChange?.(focusMode);
+        return () => onFocusModeChange?.(false);
+    }, [focusMode, onFocusModeChange]);
+
+    useEffect(() => {
+        if (!focusMode) {
+            return;
+        }
+        function handleKeyDown(event: Event) {
+            if ((event as globalThis.KeyboardEvent).key === 'Escape') {
+                setFocusMode(false);
+            }
+        }
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [focusMode]);
 
     async function copyVisibleLogs() {
         if (consoleLogs.length === 0) {
@@ -4102,8 +4992,22 @@ function ClassicLogsPanel({
         }
     }
 
+    function updateAppearance(next: Partial<LogAppearance>) {
+        setAppearance((current) => sanitizeLogAppearance({...current, ...next}));
+    }
+
+    function resetAppearance() {
+        setAppearance(defaultLogAppearance);
+    }
+
     return (
-        <section className="classic-logs">
+        <section className={focusMode ? 'classic-logs logs-focus-mode' : 'classic-logs'}>
+            {focusMode && (
+                <div className="logs-focus-bar">
+                    <button type="button" onClick={() => setFocusMode(false)}>Controls</button>
+                    <button type="button" onClick={() => setAppearanceOpen((current) => !current)}>Appearance</button>
+                </div>
+            )}
             <aside className="logs-sidebar">
                 <div className="logs-mode-switch">
                     <button
@@ -4187,32 +5091,56 @@ function ClassicLogsPanel({
                         <p>{filteredLogs.length} visible events{errorCount > 0 ? ` / ${errorCount} errors` : ''}</p>
                     </div>
                     <div className="logs-actions">
+                        <button type="button" onClick={() => setFocusMode(true)}>Focus</button>
+                        <button type="button" onClick={() => setAppearanceOpen((current) => !current)}>
+                            {appearanceOpen ? 'Hide appearance' : 'Appearance'}
+                        </button>
+                        {onOpenLogsWindow && (
+                            <button type="button" onClick={onOpenLogsWindow}>Open window</button>
+                        )}
                         <button type="button" onClick={copyVisibleLogs} disabled={consoleLogs.length === 0}>Copy visible</button>
                         <button className="danger" type="button" onClick={clearLogs} disabled={logs.length === 0}>Clear</button>
                     </div>
                 </div>
 
+                {appearanceOpen && (
+                    <LogAppearancePanel
+                        appearance={appearance}
+                        onChange={updateAppearance}
+                        onReset={resetAppearance}
+                    />
+                )}
+
                 <div className="logs-toolbar">
                     <label>
                         Installation
-                        <select value={profileFilter} onChange={(event) => setProfileFilter(event.target.value)}>
-                            <option value="all">All installations</option>
-                            <option value="global">Launcher only</option>
-                            {profiles.map((profile) => (
-                                <option key={profile.id} value={profile.id}>
-                                    {profile.name}
-                                </option>
-                            ))}
-                        </select>
+                        <CommandSelect
+                            value={profileFilter}
+                            ariaLabel="Log installation filter"
+                            options={[
+                                {value: 'all', label: 'All installations'},
+                                {value: 'global', label: 'Launcher only'},
+                                ...profiles.map((profile) => ({
+                                    value: profile.id,
+                                    label: profile.name,
+                                })),
+                            ]}
+                            onChange={setProfileFilter}
+                        />
                     </label>
                     <label>
                         Level
-                        <select value={levelFilter} onChange={(event) => setLevelFilter(event.target.value as LogLevelFilter)}>
-                            <option value="all">All levels</option>
-                            <option value="info">Info</option>
-                            <option value="success">Success</option>
-                            <option value="error">Error</option>
-                        </select>
+                        <CommandSelect
+                            value={levelFilter}
+                            ariaLabel="Log level filter"
+                            options={[
+                                {value: 'all', label: 'All levels'},
+                                {value: 'info', label: 'Info'},
+                                {value: 'success', label: 'Success'},
+                                {value: 'error', label: 'Error'},
+                            ]}
+                            onChange={(nextLevel) => setLevelFilter(nextLevel as LogLevelFilter)}
+                        />
                     </label>
                     <label className="logs-search">
                         Search
@@ -4226,7 +5154,7 @@ function ClassicLogsPanel({
 
                 {copyStatus && <p className="logs-status">{copyStatus}</p>}
 
-                <div className="logs-console" role="log" aria-live="polite">
+                <div className="logs-console" style={appearanceStyle} role="log" aria-live="polite">
                     {consoleLogs.length === 0 ? (
                         <p className="logs-empty">No logs match the current filters.</p>
                     ) : (
@@ -4251,6 +5179,10 @@ function ClassicLogsPanel({
                                 <p>{gameLogStatusText(gameProfile, gameLogList, selectedGameContent, liveGameLogs, gameFileName)}</p>
                             </div>
                             <div className="logs-actions">
+                                <button type="button" onClick={() => setFocusMode(true)}>Focus</button>
+                                <button type="button" onClick={() => setAppearanceOpen((current) => !current)}>
+                                    {appearanceOpen ? 'Hide appearance' : 'Appearance'}
+                                </button>
                                 <button type="button" disabled={!gameProfile} onClick={copyGameLog}>Copy visible</button>
                                 <button
                                     type="button"
@@ -4269,25 +5201,33 @@ function ClassicLogsPanel({
                             </div>
                         </div>
 
+                        {appearanceOpen && (
+                            <LogAppearancePanel
+                                appearance={appearance}
+                                onChange={updateAppearance}
+                                onReset={resetAppearance}
+                            />
+                        )}
+
                         <div className="logs-toolbar game-logs-toolbar">
                             <label>
                                 Installation
-                                <select
+                                <CommandSelect
                                     value={gameProfile?.id ?? ''}
                                     disabled={profiles.length === 0}
-                                    onChange={(event) => {
-                                        setGameProfileId(event.target.value);
+                                    ariaLabel="Game log installation"
+                                    options={profiles.length === 0
+                                        ? [{value: '', label: 'No installations'}]
+                                        : profiles.map((profile) => ({
+                                            value: profile.id,
+                                            label: profile.name,
+                                        }))}
+                                    onChange={(profileId) => {
+                                        setGameProfileId(profileId);
                                         setGameFileName('live');
                                         setCopyStatus('');
                                     }}
-                                >
-                                    {profiles.length === 0 && <option value="">No installations</option>}
-                                    {profiles.map((profile) => (
-                                        <option key={profile.id} value={profile.id}>
-                                            {profile.name}
-                                        </option>
-                                    ))}
-                                </select>
+                                />
                             </label>
                             <div className="game-log-meta">
                                 <span>{gameLogList?.logsDir ?? 'No logs folder selected'}</span>
@@ -4296,7 +5236,7 @@ function ClassicLogsPanel({
 
                         {copyStatus && <p className="logs-status">{copyStatus}</p>}
 
-                        <div className="logs-console game-log-console" role="log" aria-live="polite">
+                        <div className="logs-console game-log-console" style={appearanceStyle} role="log" aria-live="polite">
                             {gameFileName === 'live' ? (
                                 liveGameLogs.length === 0 ? (
                                     <p className="logs-empty">No live game output for this installation yet.</p>
@@ -4327,6 +5267,142 @@ function ClassicLogsPanel({
                     </>
                 )}
             </section>
+        </section>
+    );
+}
+
+function LogAppearancePanel({
+    appearance,
+    onChange,
+    onReset
+}: {
+    appearance: LogAppearance;
+    onChange: (next: Partial<LogAppearance>) => void;
+    onReset: () => void;
+}) {
+    return (
+        <section className="logs-appearance-panel">
+            <div className="logs-appearance-heading">
+                <div>
+                    <p className="eyebrow">Log appearance</p>
+                    <strong>Columns and colors</strong>
+                </div>
+                <button className="small" type="button" onClick={onReset}>Reset</button>
+            </div>
+            <div className="logs-appearance-grid">
+                <label>
+                    Font size
+                    <input
+                        type="range"
+                        min="10"
+                        max="22"
+                        value={appearance.fontSize}
+                        onChange={(event) => onChange({fontSize: Number(event.target.value)})}
+                    />
+                    <span>{appearance.fontSize}px</span>
+                </label>
+                <label>
+                    Time width
+                    <input
+                        type="range"
+                        min="46"
+                        max="180"
+                        value={appearance.timeWidth}
+                        onChange={(event) => onChange({timeWidth: Number(event.target.value)})}
+                    />
+                    <span>{appearance.timeWidth}px</span>
+                </label>
+                <label>
+                    Level width
+                    <input
+                        type="range"
+                        min="46"
+                        max="160"
+                        value={appearance.levelWidth}
+                        onChange={(event) => onChange({levelWidth: Number(event.target.value)})}
+                    />
+                    <span>{appearance.levelWidth}px</span>
+                </label>
+                <label>
+                    Source width
+                    <input
+                        type="range"
+                        min="60"
+                        max="260"
+                        value={appearance.sourceWidth}
+                        onChange={(event) => onChange({sourceWidth: Number(event.target.value)})}
+                    />
+                    <span>{appearance.sourceWidth}px</span>
+                </label>
+                <label>
+                    Profile width
+                    <input
+                        type="range"
+                        min="60"
+                        max="280"
+                        value={appearance.profileWidth}
+                        onChange={(event) => onChange({profileWidth: Number(event.target.value)})}
+                    />
+                    <span>{appearance.profileWidth}px</span>
+                </label>
+                <label>
+                    Background
+                    <input
+                        type="color"
+                        value={appearance.consoleBg}
+                        onChange={(event) => onChange({consoleBg: event.target.value})}
+                    />
+                </label>
+                <label>
+                    Time color
+                    <input
+                        type="color"
+                        value={appearance.timeColor}
+                        onChange={(event) => onChange({timeColor: event.target.value})}
+                    />
+                </label>
+                <label>
+                    Level color
+                    <input
+                        type="color"
+                        value={appearance.levelColor}
+                        disabled={appearance.severityColors}
+                        onChange={(event) => onChange({levelColor: event.target.value})}
+                    />
+                </label>
+                <label>
+                    Source color
+                    <input
+                        type="color"
+                        value={appearance.sourceColor}
+                        onChange={(event) => onChange({sourceColor: event.target.value})}
+                    />
+                </label>
+                <label>
+                    Profile color
+                    <input
+                        type="color"
+                        value={appearance.profileColor}
+                        onChange={(event) => onChange({profileColor: event.target.value})}
+                    />
+                </label>
+                <label>
+                    Message color
+                    <input
+                        type="color"
+                        value={appearance.messageColor}
+                        onChange={(event) => onChange({messageColor: event.target.value})}
+                    />
+                </label>
+                <label className="logs-appearance-toggle">
+                    <input
+                        type="checkbox"
+                        checked={appearance.severityColors}
+                        onChange={(event) => onChange({severityColors: event.target.checked})}
+                    />
+                    Severity colors
+                </label>
+            </div>
         </section>
     );
 }
@@ -4458,10 +5534,13 @@ function playDisabledReason(
     if (!profile) {
         return 'Select profile';
     }
-    if (launch?.status === 'running' || launch?.status === 'starting') {
+    if (launch?.status === 'stopping') {
+        return 'Stop in progress';
+    }
+    if (isLaunchActive(launch)) {
         return 'Already running';
     }
-    if (profile.loader.type !== 'vanilla' && profile.loader.type !== 'fabric' && profile.loader.type !== 'quilt' && profile.loader.type !== 'forge' && profile.loader.type !== 'neoforge') {
+    if (!isLaunchableLoader(profile.loader.type)) {
         return `${profile.loader.type} launch pending`;
     }
     if (profile.install?.status !== 'installed') {
@@ -4488,11 +5567,209 @@ function launchStatusText(launch: LaunchState) {
             return 'Running: ' + launch.message;
         case 'starting':
             return 'Starting: ' + launch.message;
+        case 'stopping':
+            return 'Stopping: ' + launch.message;
         case 'stopped':
             return `Stopped${launch.exitCode !== undefined ? ` with exit ${launch.exitCode}` : ''}.`;
         case 'failed':
             return 'Failed: ' + launch.message;
     }
+}
+
+function isLaunchActive(launch?: LaunchState) {
+    return launch?.status === 'starting' || launch?.status === 'running' || launch?.status === 'stopping';
+}
+
+function shouldShowStopButton(launch?: LaunchState) {
+    return launch?.status === 'running' || launch?.status === 'stopping';
+}
+
+function launchActionLabel(launch?: LaunchState) {
+    switch (launch?.status) {
+        case 'starting':
+            return 'Starting';
+        case 'running':
+            return 'Running';
+        case 'stopping':
+            return 'Stopping';
+        default:
+            return 'Play';
+    }
+}
+
+function profileHealthItems({
+    profile,
+    progress,
+    launch,
+    javaRuntime,
+    javaInstallProgress,
+    modList,
+    modrinthUpdatePlans,
+    onInstall,
+    onRepair,
+    onInstallJava,
+    onStop,
+    onBrowseMods,
+    onOpenLogs,
+}: {
+    profile: domain.Profile;
+    progress?: InstallProgress;
+    launch?: LaunchState;
+    javaRuntime?: domain.ProfileJavaRuntime;
+    javaInstallProgress: JavaInstallProgress | null;
+    modList?: domain.ModList;
+    modrinthUpdatePlans: domain.ModrinthUpdatePlan[];
+    onInstall: (id: string) => void;
+    onRepair: (id: string) => void;
+    onInstallJava: (version: number) => void;
+    onStop: (id: string) => void;
+    onBrowseMods: (profileId: string) => void;
+    onOpenLogs: () => void;
+}): ProfileHealthItem[] {
+    const progressActive = !!progress && !progress.done && progress.stage !== 'failed';
+    const installing = isInstalling(profile, {[profile.id]: progress});
+    const installVisible = shouldShowInstallButton(profile, progress);
+    const repairVisible = shouldShowRepairButton(profile, progress);
+    const installFailed = profile.install?.status === 'failed' || !!profile.install?.lastError;
+    const installAction = installFailed && repairVisible
+        ? {label: 'Repair', handler: () => onRepair(profile.id)}
+        : installVisible
+            ? {label: installing ? 'Installing' : 'Install', handler: () => onInstall(profile.id)}
+            : repairVisible
+                ? {label: installing ? 'Repairing' : 'Repair', handler: () => onRepair(profile.id)}
+                : undefined;
+
+    const items: ProfileHealthItem[] = [{
+        key: 'install',
+        label: 'Minecraft files',
+        status: progressActive ? progressMessage(progress) : installStatusText(profile),
+        detail: profile.install?.lastError || profile.install?.message || 'Base game and loader files are tracked for this profile.',
+        tone: progressActive ? 'busy' : installFailed ? 'error' : profile.install?.status === 'installed' ? 'ok' : 'warn',
+        actionLabel: installAction?.label,
+        actionClass: installFailed ? 'primary' : undefined,
+        actionDisabled: installing,
+        onAction: installAction?.handler,
+    }];
+
+    const javaProgressMatches = !!javaRuntime?.requiredMajor && javaInstallProgress?.version === javaRuntime.requiredMajor.toString();
+    const javaBusy = isJavaInstalling(javaInstallProgress) && javaProgressMatches;
+    items.push({
+        key: 'java',
+        label: 'Java runtime',
+        status: javaBusy
+            ? javaProgressMessage(javaInstallProgress)
+            : javaRuntime
+                ? javaRuntime.installed ? `Java ${javaRuntime.requiredMajor} ready` : `Java ${javaRuntime.requiredMajor} missing`
+                : 'Checking runtime',
+        detail: javaRuntimeText(javaRuntime),
+        tone: javaBusy ? 'busy' : !javaRuntime ? 'warn' : javaRuntime.installed ? 'ok' : 'error',
+        actionLabel: javaRuntime && !javaRuntime.installed ? `Install Java ${javaRuntime.requiredMajor}` : undefined,
+        actionClass: 'primary',
+        actionDisabled: javaBusy,
+        onAction: javaRuntime && !javaRuntime.installed ? () => onInstallJava(javaRuntime.requiredMajor) : undefined,
+    });
+
+    const launchable = isLaunchableLoader(profile.loader.type);
+    items.push({
+        key: 'loader',
+        label: 'Loader',
+        status: launchable ? 'Supported' : 'Unsupported',
+        detail: launchable
+            ? `${profile.loader.type}${profile.loader.version ? ` ${profile.loader.version}` : ''} can be launched by Power Mine.`
+            : `${profile.loader.type} profiles are not launchable yet.`,
+        tone: launchable ? 'ok' : 'error',
+    });
+
+    const modLoader = isModCapableLoader(profile.loader.type);
+    const mods = modList?.mods ?? [];
+    const disabledCount = mods.filter((mod) => !mod.enabled).length;
+    const updateCount = modrinthUpdatePlans.filter((plan) => plan.updateAvailable).length;
+    const updateErrorCount = modrinthUpdatePlans.filter((plan) => !!plan.checkError).length;
+    items.push({
+        key: 'mods',
+        label: 'Mods',
+        status: modLoader
+            ? modList ? `${mods.length} file${mods.length === 1 ? '' : 's'}` : 'Not loaded yet'
+            : 'Not used',
+        detail: modLoader
+            ? modList
+                ? modHealthDetail(mods.length, disabledCount, updateCount, updateErrorCount)
+                : 'Open Library to load local mods and Modrinth update state.'
+            : 'Vanilla profiles do not use a mods folder.',
+        tone: !modLoader ? 'idle' : updateErrorCount > 0 ? 'error' : updateCount > 0 || disabledCount > 0 || !modList ? 'warn' : 'ok',
+        actionLabel: modLoader ? 'Browse mods' : undefined,
+        onAction: modLoader ? () => onBrowseMods(profile.id) : undefined,
+    });
+
+    items.push({
+        key: 'launch',
+        label: 'Launch',
+        status: launch ? launchStatusText(launch) : 'Not running',
+        detail: launch ? launch.message : 'No active Minecraft process for this profile.',
+        tone: launch?.status === 'failed' ? 'error' : isLaunchActive(launch) ? 'busy' : 'idle',
+        actionLabel: shouldShowStopButton(launch) ? (launch?.status === 'stopping' ? 'Stopping' : 'Stop') : launch?.status === 'failed' ? 'Open logs' : undefined,
+        actionClass: shouldShowStopButton(launch) ? 'danger' : undefined,
+        actionDisabled: launch?.status === 'stopping',
+        onAction: shouldShowStopButton(launch) ? () => onStop(profile.id) : launch?.status === 'failed' ? onOpenLogs : undefined,
+    });
+
+    items.push({
+        key: 'logs',
+        label: 'Logs',
+        status: profile.install?.lastError || launch?.status === 'failed' ? 'Needs review' : 'Available',
+        detail: profile.install?.lastError || launch?.message || 'Open launcher and game logs when a profile fails to install or launch.',
+        tone: profile.install?.lastError || launch?.status === 'failed' ? 'error' : 'ok',
+        actionLabel: 'Open logs',
+        onAction: onOpenLogs,
+    });
+
+    return items;
+}
+
+function profileHealthSummary(items: ProfileHealthItem[], playReason: string | null, launch?: LaunchState) {
+    if (launch?.status === 'running') {
+        return {title: 'Minecraft is running', detail: launch.message, label: 'Running', tone: 'busy' as HealthTone};
+    }
+    if (launch?.status === 'starting' || launch?.status === 'stopping') {
+        return {title: 'Launch is changing state', detail: launchStatusText(launch), label: 'Busy', tone: 'busy' as HealthTone};
+    }
+    if (items.some((item) => item.tone === 'error')) {
+        return {title: 'Action required', detail: firstHealthProblem(items), label: 'Fix', tone: 'error' as HealthTone};
+    }
+    if (playReason) {
+        return {title: 'Not ready yet', detail: playReason, label: 'Check', tone: 'warn' as HealthTone};
+    }
+    if (items.some((item) => item.tone === 'warn')) {
+        return {title: 'Ready with notes', detail: firstHealthProblem(items), label: 'Review', tone: 'warn' as HealthTone};
+    }
+    return {title: 'Ready to play', detail: 'Profile files, Java runtime, loader, and launch state look good.', label: 'Ready', tone: 'ok' as HealthTone};
+}
+
+function firstHealthProblem(items: ProfileHealthItem[]) {
+    const item = items.find((candidate) => candidate.tone === 'error' || candidate.tone === 'warn');
+    return item ? `${item.label}: ${item.status}` : 'No blockers detected.';
+}
+
+function modHealthDetail(modCount: number, disabledCount: number, updateCount: number, updateErrorCount: number) {
+    const parts = [`${modCount} installed`];
+    if (disabledCount > 0) {
+        parts.push(`${disabledCount} disabled`);
+    }
+    if (updateCount > 0) {
+        parts.push(`${updateCount} update${updateCount === 1 ? '' : 's'} available`);
+    }
+    if (updateErrorCount > 0) {
+        parts.push(`${updateErrorCount} update check error${updateErrorCount === 1 ? '' : 's'}`);
+    }
+    return parts.join(', ') + '.';
+}
+
+function isLaunchableLoader(loader: string) {
+    return loader === 'vanilla' || loader === 'fabric' || loader === 'quilt' || loader === 'forge' || loader === 'neoforge';
+}
+
+function isModCapableLoader(loader: string) {
+    return loader === 'fabric' || loader === 'quilt' || loader === 'forge' || loader === 'neoforge';
 }
 
 function javaStatusText(status: domain.JavaStatus | null, fallbackPath: string) {

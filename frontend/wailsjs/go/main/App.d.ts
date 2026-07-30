@@ -4,6 +4,8 @@ import {domain} from '../models';
 
 export function AppInfo():Promise<domain.AppInfo>;
 
+export function ClearLauncherLogs():Promise<void>;
+
 export function CreateProfile(arg1:domain.ProfileInput):Promise<domain.Profile>;
 
 export function DeleteModrinthMod(arg1:string,arg2:string):Promise<domain.ModrinthDeleteResult>;
@@ -40,6 +42,8 @@ export function InstallModrinthModVersionFiles(arg1:string,arg2:string,arg3:stri
 
 export function InstallProfile(arg1:string):Promise<domain.Profile>;
 
+export function IsLogsWindow():Promise<boolean>;
+
 export function LaunchProfile(arg1:string):Promise<domain.LaunchState>;
 
 export function ListFabricLoaderVersions():Promise<Array<domain.VersionOption>>;
@@ -47,6 +51,8 @@ export function ListFabricLoaderVersions():Promise<Array<domain.VersionOption>>;
 export function ListForgeLoaderVersions():Promise<Array<domain.VersionOption>>;
 
 export function ListInstalledModrinthProjects(arg1:string):Promise<Array<string>>;
+
+export function ListLauncherLogs():Promise<Array<domain.LauncherLog>>;
 
 export function ListMinecraftVersions():Promise<Array<domain.VersionOption>>;
 
@@ -63,6 +69,8 @@ export function ListProfileMods(arg1:string):Promise<domain.ModList>;
 export function ListProfiles():Promise<domain.ProfileList>;
 
 export function ListQuiltLoaderVersions():Promise<Array<domain.VersionOption>>;
+
+export function OpenLauncherLogsWindow():Promise<void>;
 
 export function OpenProfileLogsFolder(arg1:string):Promise<void>;
 
@@ -82,6 +90,8 @@ export function PlanModrinthUpdateVersion(arg1:string,arg2:string,arg3:string):P
 
 export function ReadProfileGameLog(arg1:string,arg2:string):Promise<domain.GameLogContent>;
 
+export function RecordLauncherLog(arg1:domain.LauncherLog):Promise<domain.LauncherLog>;
+
 export function RefreshVersionCatalog():Promise<domain.VersionCatalog>;
 
 export function RepairProfile(arg1:string):Promise<domain.Profile>;
@@ -95,6 +105,8 @@ export function SearchModrinthMods(arg1:string,arg2:string):Promise<domain.Modri
 export function SelectProfile(arg1:string):Promise<domain.ProfileList>;
 
 export function SetProfileModEnabled(arg1:string,arg2:string,arg3:boolean):Promise<domain.ModList>;
+
+export function StopProfile(arg1:string):Promise<domain.LaunchState>;
 
 export function UpdateModrinthModFile(arg1:string,arg2:string,arg3:Array<string>):Promise<domain.ModrinthUpdateResult>;
 

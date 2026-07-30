@@ -118,6 +118,15 @@ type JavaInstallProgress struct {
 	Version  string `json:"version,omitempty"`
 }
 
+type LauncherLog struct {
+	ID        string `json:"id"`
+	Time      string `json:"time"`
+	Level     string `json:"level"`
+	Source    string `json:"source"`
+	Message   string `json:"message"`
+	ProfileID string `json:"profileId,omitempty"`
+}
+
 type ProfileJavaRuntime struct {
 	ProfileID     string `json:"profileId"`
 	RequiredMajor int    `json:"requiredMajor"`
@@ -364,6 +373,7 @@ type LaunchStatus string
 const (
 	LaunchStarting LaunchStatus = "starting"
 	LaunchRunning  LaunchStatus = "running"
+	LaunchStopping LaunchStatus = "stopping"
 	LaunchStopped  LaunchStatus = "stopped"
 	LaunchFailed   LaunchStatus = "failed"
 )

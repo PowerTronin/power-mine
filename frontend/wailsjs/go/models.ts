@@ -176,6 +176,28 @@ export namespace domain {
 	        this.endedAt = source["endedAt"];
 	    }
 	}
+	export class LauncherLog {
+	    id: string;
+	    time: string;
+	    level: string;
+	    source: string;
+	    message: string;
+	    profileId?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new LauncherLog(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.time = source["time"];
+	        this.level = source["level"];
+	        this.source = source["source"];
+	        this.message = source["message"];
+	        this.profileId = source["profileId"];
+	    }
+	}
 	export class LoaderConfig {
 	    type: string;
 	    version?: string;
@@ -1183,4 +1205,3 @@ export namespace domain {
 	}
 
 }
-

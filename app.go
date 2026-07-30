@@ -40,8 +40,12 @@ type App struct {
 	modpackService   *modpacks.Service
 	modsService      *mods.Service
 	running          map[string]*exec.Cmd
+	stopping         map[string]bool
+	launcherLogPath  string
+	launcherLogMu    sync.Mutex
 	startupErr       error
 	headless         bool
+	logsWindow       bool
 }
 
 const maxModrinthDependencyDepth = 12
@@ -64,7 +68,8 @@ type modrinthInstallPlanState struct {
 
 func NewApp() *App {
 	return &App{
-		running: make(map[string]*exec.Cmd),
+		running:  make(map[string]*exec.Cmd),
+		stopping: make(map[string]bool),
 	}
 }
 
@@ -88,13 +93,14 @@ func (a *App) initServices(ctx context.Context, dataDir string) {
 	a.javaService = javasvc.NewService(dataDir)
 	a.modpackService = modpacks.NewService()
 	a.modsService = mods.NewService()
+	a.launcherLogPath = filepath.Join(dataDir, "launcher", "logs.jsonl")
 	a.startupErr = nil
 }
 
 func (a *App) AppInfo() domain.AppInfo {
 	return domain.AppInfo{
 		Name:    platform.AppName,
-		Version: "0.1.0",
+		Version: "0.2.0",
 	}
 }
 
@@ -1939,6 +1945,43 @@ func (a *App) LaunchProfile(id string) (domain.LaunchState, error) {
 	}, nil
 }
 
+func (a *App) StopProfile(id string) (domain.LaunchState, error) {
+	if err := a.ensureReady(); err != nil {
+		return domain.LaunchState{}, err
+	}
+
+	command, err := a.requestLaunchStop(id)
+	if err != nil {
+		return domain.LaunchState{}, err
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	a.emitLaunchEvent(domain.LaunchEvent{
+		ProfileID: id,
+		Status:    domain.LaunchStopping,
+		Message:   "Stop requested",
+		Time:      now,
+	})
+
+	if err := stopProcess(command); err != nil {
+		a.clearLaunchStopping(id)
+		a.emitLaunchEvent(domain.LaunchEvent{
+			ProfileID: id,
+			Status:    domain.LaunchFailed,
+			Message:   "Stop failed: " + err.Error(),
+			Time:      time.Now().UTC().Format(time.RFC3339),
+		})
+		return domain.LaunchState{}, err
+	}
+	go a.killLaunchAfterTimeout(id, command, 8*time.Second)
+
+	return domain.LaunchState{
+		ProfileID: id,
+		Status:    domain.LaunchStopping,
+		Message:   "Stop requested",
+	}, nil
+}
+
 func (a *App) javaPathForProfile(profile domain.Profile, fallbackPath string) (string, int, error) {
 	runtime, err := a.profileJavaRuntime(profile, fallbackPath)
 	if err != nil {
@@ -2035,6 +2078,7 @@ func (a *App) reserveLaunch(profileID string) error {
 		return fmt.Errorf("profile is already running")
 	}
 	a.running[profileID] = nil
+	a.stopping[profileID] = false
 	return nil
 }
 
@@ -2044,10 +2088,62 @@ func (a *App) markLaunchRunning(profileID string, command *exec.Cmd) {
 	a.running[profileID] = command
 }
 
-func (a *App) releaseLaunch(profileID string) {
+func (a *App) requestLaunchStop(profileID string) (*exec.Cmd, error) {
 	a.launchMu.Lock()
 	defer a.launchMu.Unlock()
+	command, ok := a.running[profileID]
+	if !ok {
+		return nil, fmt.Errorf("profile is not running")
+	}
+	if command == nil || command.Process == nil {
+		return nil, fmt.Errorf("profile is still preparing launch")
+	}
+	a.stopping[profileID] = true
+	return command, nil
+}
+
+func (a *App) clearLaunchStopping(profileID string) {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
+	a.stopping[profileID] = false
+}
+
+func (a *App) releaseLaunch(profileID string) bool {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
+	stopping := a.stopping[profileID]
 	delete(a.running, profileID)
+	delete(a.stopping, profileID)
+	return stopping
+}
+
+func (a *App) killLaunchAfterTimeout(profileID string, command *exec.Cmd, timeout time.Duration) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	<-timer.C
+
+	a.launchMu.Lock()
+	stillRunning := a.running[profileID] == command
+	a.launchMu.Unlock()
+	if !stillRunning || command.Process == nil {
+		return
+	}
+
+	if err := command.Process.Kill(); err != nil {
+		a.emitLaunchEvent(domain.LaunchEvent{
+			ProfileID: profileID,
+			Status:    domain.LaunchFailed,
+			Message:   "Stop timeout reached and kill failed: " + err.Error(),
+			Time:      time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
+	a.emitLaunchEvent(domain.LaunchEvent{
+		ProfileID: profileID,
+		Status:    domain.LaunchStopping,
+		Message:   "Stop timeout reached; killing Minecraft process",
+		Time:      time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func (a *App) emitInstallProgress(event domain.InstallProgress) {
@@ -2090,14 +2186,17 @@ func (a *App) streamLaunchOutput(profileID string, stream string, reader io.Read
 func (a *App) waitForLaunch(profileID string, command *exec.Cmd) {
 	err := command.Wait()
 	exitCode := command.ProcessState.ExitCode()
+	stopping := a.releaseLaunch(profileID)
 	status := domain.LaunchStopped
 	message := "Minecraft process stopped"
 	if err != nil {
 		status = domain.LaunchFailed
 		message = "Minecraft process failed: " + err.Error()
 	}
-
-	a.releaseLaunch(profileID)
+	if stopping {
+		status = domain.LaunchStopped
+		message = "Minecraft process stopped by user"
+	}
 
 	a.emitLaunchEvent(domain.LaunchEvent{
 		ProfileID: profileID,
@@ -2113,6 +2212,21 @@ func (a *App) emitLaunchEvent(event domain.LaunchEvent) {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, "launch:event", event)
+}
+
+func stopProcess(command *exec.Cmd) error {
+	if command == nil || command.Process == nil {
+		return fmt.Errorf("process is not available")
+	}
+	if command.ProcessState != nil && command.ProcessState.Exited() {
+		return nil
+	}
+	if err := command.Process.Signal(os.Interrupt); err != nil {
+		if killErr := command.Process.Kill(); killErr != nil {
+			return fmt.Errorf("interrupt failed: %v; kill failed: %w", err, killErr)
+		}
+	}
+	return nil
 }
 
 func modpackDefaultFilename(name string) string {
