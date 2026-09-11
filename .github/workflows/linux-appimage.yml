@@ -1,4 +1,4 @@
-name: Linux AppImage
+name: Linux Packages
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   appimage:
-    name: Build Linux AppImage
+    name: Build Linux Packages
     runs-on: ubuntu-24.04
 
     steps:
@@ -55,25 +55,33 @@ jobs:
       - name: Build AppImage
         run: make appimage
 
+      - name: Build Debian package
+        run: SKIP_WAILS_BUILD=1 make deb
+
       - name: Generate checksum
         run: |
-          for file in dist/*.appimage; do
+          for file in dist/*.appimage dist/*.deb; do
+            [ -e "$file" ] || continue
             sha256sum "$file" > "$file.sha256"
           done
 
-      - name: Upload AppImage artifact
+      - name: Upload Linux package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: power-mine-linux-appimage
+          name: power-mine-linux-packages
           path: |
             dist/*.appimage
             dist/*.appimage.sha256
+            dist/*.deb
+            dist/*.deb.sha256
           if-no-files-found: error
 
-      - name: Attach AppImage to GitHub Release
+      - name: Attach Linux packages to GitHub Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.appimage
             dist/*.appimage.sha256
+            dist/*.deb
+            dist/*.deb.sha256

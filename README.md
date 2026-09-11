@@ -81,6 +81,7 @@ Useful commands:
 - `wails dev` starts the desktop app in development mode.
 - `wails build` creates a production build.
 - `make appimage` creates `dist/power-mine-<version>-linux-<arch>.appimage`.
+- `make deb` creates `dist/power-mine_<version>_<arch>.deb`.
 - `make agent` builds the Fabric in-game Codex agent at `agent/build/libs/power-mine-agent-0.1.0.jar`.
 - `python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile` runs headless mod diagnostics for Codex/local automation.
 - `python3 tools/codex/power_mine_mcp.py --pretty install-java 8` installs the managed Java 8 runtime used by legacy Minecraft and Forge profiles.
@@ -99,13 +100,13 @@ On Ubuntu 24.04 or another distro that provides WebKitGTK 4.1 instead of 4.0, in
 2. Run `go test ./...`.
 3. Run `npm --prefix frontend run build`.
 4. Run `wails build`.
-5. Run `make appimage` on Linux.
-6. Upload the generated file from `dist/` as a Linux release asset.
+5. Run `make appimage` and `make deb` on Linux.
+6. Upload the generated files from `dist/` as Linux release assets.
 
-GitHub Actions can build the Linux AppImage without a local Go/Wails setup:
+GitHub Actions can build the Linux AppImage and Debian package without a local Go/Wails setup:
 
 1. Open **Actions**.
-2. Run **Linux AppImage** manually to get the `power-mine-linux-appimage` artifact.
-3. Or publish a GitHub Release; the workflow attaches `dist/*.appimage` to that release automatically.
+2. Run **Linux Packages** manually to get the `power-mine-linux-packages` artifact.
+3. Or publish a GitHub Release; the workflow attaches `dist/*.appimage` and `dist/*.deb` to that release automatically.
 
 The design and implementation plan live under `docs/superpowers/`.
