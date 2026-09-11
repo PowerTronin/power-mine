@@ -1,6 +1,6 @@
 WAILS ?= wails
 
-.PHONY: launch dev build appimage deb rpm agent test test-go test-frontend generate
+.PHONY: launch dev build appimage deb rpm windows agent test test-go test-frontend generate
 
 launch:
 	./start-power-mine.sh
@@ -19,6 +19,9 @@ deb:
 
 rpm:
 	WAILS="$(WAILS)" ./scripts/build-rpm.sh
+
+windows:
+	pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-windows.ps1
 
 agent:
 	./scripts/build-agent.sh

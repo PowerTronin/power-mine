@@ -2,15 +2,17 @@
 
 Power Mine is a Go + Wails desktop launcher for Minecraft Java Edition.
 
-The current preview targets macOS and Linux with local profile management, offline player mode, Java runtime setup, Minecraft installation and launch, Modrinth browsing, local mod management, logs, and Modrinth `.mrpack` import/export.
+The current preview targets desktop Linux, Windows, and macOS with local profile management, offline player mode, Java runtime setup, Minecraft installation and launch, Modrinth browsing, local mod management, logs, and Modrinth `.mrpack` import/export.
 
 ## Releases
 
 Preview builds are published on GitHub Releases.
 
 - `PowerMine-0.1.0-macos-amd64.dmg` is the first macOS Intel installer image.
-- Linux AppImage builds are published as `power-mine-<version>-linux-x86_64.appimage`.
-- Local Linux packaging is available through `make appimage`; the file is written to `dist/`.
+- Linux builds are published as `power-mine-<version>-linux-x86_64.appimage`, `power-mine_<version>_amd64.deb`, and `power-mine-<version>-1.x86_64.rpm`.
+- Windows amd64 builds are published as `power-mine-<version>-windows-amd64-installer.exe` and `power-mine-<version>-windows-amd64.exe`.
+- Local Linux packaging is available through `make appimage`, `make deb`, and `make rpm`; files are written to `dist/`.
+- Local Windows packaging is available through `make windows` on Windows with NSIS installed; files are written to `dist/`.
 
 ## Codex Tool
 
@@ -70,6 +72,7 @@ Requirements:
 - Go
 - Node.js 20.19+ or 22.12+ and npm
 - Wails v2 CLI
+- NSIS for Windows installer builds
 
 Useful commands:
 
@@ -83,6 +86,7 @@ Useful commands:
 - `make appimage` creates `dist/power-mine-<version>-linux-<arch>.appimage`.
 - `make deb` creates `dist/power-mine_<version>_<arch>.deb`.
 - `make rpm` creates `dist/power-mine-<version>-<release>.<arch>.rpm`.
+- `make windows` creates `dist/power-mine-<version>-windows-amd64-installer.exe` and `dist/power-mine-<version>-windows-amd64.exe` on Windows.
 - `make agent` builds the Fabric in-game Codex agent at `agent/build/libs/power-mine-agent-0.1.0.jar`.
 - `python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile` runs headless mod diagnostics for Codex/local automation.
 - `python3 tools/codex/power_mine_mcp.py --pretty install-java 8` installs the managed Java 8 runtime used by legacy Minecraft and Forge profiles.
@@ -97,17 +101,21 @@ On Ubuntu 24.04 or another distro that provides WebKitGTK 4.1 instead of 4.0, in
 
 ## Release Checklist
 
-1. Update the version in `app.go`.
+1. Update the version in `app.go` and `wails.json` (`info.productVersion`).
 2. Run `go test ./...`.
 3. Run `npm --prefix frontend run build`.
 4. Run `wails build`.
 5. Run `make appimage`, `make deb`, and `make rpm` on Linux.
-6. Upload the generated files from `dist/` as Linux release assets.
+6. Run `make windows` on Windows.
+7. Upload the generated files from `dist/` as release assets.
 
-GitHub Actions can build the Linux AppImage, Debian package, and RPM package without a local Go/Wails setup:
+GitHub Actions can build the Linux and Windows packages without a local Go/Wails setup:
 
 1. Open **Actions**.
 2. Run **Linux Packages** manually to get the `power-mine-linux-packages` artifact.
-3. Or publish a GitHub Release; the workflow attaches `dist/*.appimage`, `dist/*.deb`, and `dist/*.rpm` to that release automatically.
+3. Run **Windows Packages** manually to get the `power-mine-windows-amd64` artifact.
+4. Or publish a GitHub Release; the workflows attach Linux and Windows package files from `dist/` to that release automatically.
+
+Package smoke-test steps are documented in `docs/release-smoke-tests.md`.
 
 The design and implementation plan live under `docs/superpowers/`.
