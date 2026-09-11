@@ -68,7 +68,7 @@ Power Mine is licensed under the GNU General Public License v3.0. See [LICENSE](
 Requirements:
 
 - Go
-- Node.js and npm
+- Node.js 20.19+ or 22.12+ and npm
 - Wails v2 CLI
 
 Useful commands:
