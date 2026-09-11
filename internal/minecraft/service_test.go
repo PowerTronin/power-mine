@@ -19,7 +19,11 @@ func TestLibraryAllowedHonorsCurrentOSRules(t *testing.T) {
 	if !libraryAllowed([]rule{{Action: "allow", OS: &ruleOS{Name: minecraftOSName()}}}) {
 		t.Fatal("matching allow rule should allow library")
 	}
-	if libraryAllowed([]rule{{Action: "allow", OS: &ruleOS{Name: "windows"}}}) {
+	otherOS := "windows"
+	if minecraftOSName() == otherOS {
+		otherOS = "linux"
+	}
+	if libraryAllowed([]rule{{Action: "allow", OS: &ruleOS{Name: otherOS}}}) {
 		t.Fatal("non-matching allow rule should not allow library")
 	}
 }
