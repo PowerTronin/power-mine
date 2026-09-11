@@ -1,6 +1,6 @@
 WAILS ?= wails
 
-.PHONY: launch dev build appimage deb agent test test-go test-frontend generate
+.PHONY: launch dev build appimage deb rpm agent test test-go test-frontend generate
 
 launch:
 	./start-power-mine.sh
@@ -16,6 +16,9 @@ appimage:
 
 deb:
 	WAILS="$(WAILS)" ./scripts/build-deb.sh
+
+rpm:
+	WAILS="$(WAILS)" ./scripts/build-rpm.sh
 
 agent:
 	./scripts/build-agent.sh

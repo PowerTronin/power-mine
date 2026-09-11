@@ -38,7 +38,8 @@ jobs:
             build-essential \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
-            pkg-config
+            pkg-config \
+            rpm
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
@@ -58,9 +59,12 @@ jobs:
       - name: Build Debian package
         run: SKIP_WAILS_BUILD=1 make deb
 
+      - name: Build RPM package
+        run: SKIP_WAILS_BUILD=1 make rpm
+
       - name: Generate checksum
         run: |
-          for file in dist/*.appimage dist/*.deb; do
+          for file in dist/*.appimage dist/*.deb dist/*.rpm; do
             [ -e "$file" ] || continue
             sha256sum "$file" > "$file.sha256"
           done
@@ -74,6 +78,8 @@ jobs:
             dist/*.appimage.sha256
             dist/*.deb
             dist/*.deb.sha256
+            dist/*.rpm
+            dist/*.rpm.sha256
           if-no-files-found: error
 
       - name: Attach Linux packages to GitHub Release
@@ -85,3 +91,5 @@ jobs:
             dist/*.appimage.sha256
             dist/*.deb
             dist/*.deb.sha256
+            dist/*.rpm
+            dist/*.rpm.sha256

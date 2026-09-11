@@ -1,6 +1,7 @@
 build/bin
 build/appimage
 build/deb
+build/rpm
 build/tools
 dist
 agent/.gradle
