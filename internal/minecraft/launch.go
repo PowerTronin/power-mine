@@ -251,7 +251,7 @@ func (s *Service) launchVariables(profile domain.Profile, version versionMetadat
 		"game_assets":         filepath.Join(s.minecraftDir(), "assets", "virtual", assetsIndex),
 		"natives_directory":   nativesDir,
 		"launcher_name":       "Power Mine",
-		"launcher_version":    "0.1.0-dev",
+		"launcher_version":    "0.2.0-dev",
 		"classpath":           classpath,
 		"classpath_separator": string(os.PathListSeparator),
 		"library_directory":   filepath.Join(s.minecraftDir(), "libraries"),

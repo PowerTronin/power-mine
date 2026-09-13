@@ -1,36 +1,32 @@
-# Power Mine 0.1.0
+# Power Mine 0.2.0
 
-First preview release of Power Mine, a Go + Wails Minecraft launcher.
+Packaging-focused preview release of Power Mine, a Go + Wails Minecraft launcher.
 
 License: GPL-3.0.
 
 ## Included
 
-- Profile creation, install, repair, and launch.
-- Offline player mode for offline servers.
-- Java runtime checks and Java installation from the launcher.
-- Vanilla, Fabric, Quilt, Forge, and NeoForge foundations.
-- Modrinth browsing, dependency prompts, install/delete/update flows.
-- Local mod manager with bulk enable/disable.
-- Launcher and game logs.
-- Modrinth `.mrpack` import/export.
-- Headless Codex diagnostics tool for inspecting profiles, mod jars, loader/version compatibility, and recent crash/log output.
+- Linux release packages now include AppImage, `.deb`, and `.rpm` artifacts.
+- Windows amd64 release packages now include a portable `.exe` and NSIS installer.
+- GitHub Actions can build and attach Linux and Windows packages to a published release.
+- Release smoke tests cover Debian, Fedora/RPM, Windows 10, and Windows 11 package flows.
+- Windows 7 remains best-effort and is not a blocker for Windows 10/11 releases.
+- Frontend dependencies were updated and markdown rendering now loads as a separate chunk.
+- Legacy Forge `1.7.10` install handling and Codex/headless launcher tooling were improved.
 
 ## Installers
 
-- `PowerMine-0.1.0-macos-amd64.dmg` is the first macOS Intel build.
-- `power-mine-0.1.0-linux-x86_64.appimage` is the first Linux AppImage build.
+- `power-mine-0.2.0-linux-x86_64.appimage`
+- `power-mine_0.2.0_amd64.deb`
+- `power-mine-0.2.0-1.x86_64.rpm`
+- `power-mine-0.2.0-windows-amd64.exe`
+- `power-mine-0.2.0-windows-amd64-installer.exe`
 
-## Codex Tool
+## Smoke Status
 
-The repository includes `tools/codex/power_mine_mcp.py`, which works both as a CLI and an MCP stdio server for Codex.
+- Debian install, headless profile creation, and uninstall: passed.
+- Fedora/RPM install, headless profile creation, and uninstall: passed.
+- Windows 10 portable/installer smoke: passed.
+- Windows 11 portable/installer smoke: passed.
 
-Quick checks:
-
-```bash
-python3 tools/codex/power_mine_mcp.py --pretty list-profiles
-python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile
-python3 tools/codex/power_mine_mcp.py --pretty diagnose-mod /path/to/mod.jar --profile-id <profile-id>
-```
-
-This is an early preview build. Microsoft account authentication and signed/notarized installers are planned later.
+This is still a preview build. Microsoft account authentication and signed/notarized installers are planned later.

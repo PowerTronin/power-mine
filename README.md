@@ -8,7 +8,7 @@ The current preview targets desktop Linux, Windows, and macOS with local profile
 
 Preview builds are published on GitHub Releases.
 
-- `PowerMine-0.1.0-macos-amd64.dmg` is the first macOS Intel installer image.
+- Linux, Windows, and macOS preview builds are published from tagged releases.
 - Linux builds are published as `power-mine-<version>-linux-x86_64.appimage`, `power-mine_<version>_amd64.deb`, and `power-mine-<version>-1.x86_64.rpm`.
 - Windows amd64 builds are published as `power-mine-<version>-windows-amd64-installer.exe` and `power-mine-<version>-windows-amd64.exe`.
 - Local Linux packaging is available through `make appimage`, `make deb`, and `make rpm`; files are written to `dist/`.
@@ -87,7 +87,7 @@ Useful commands:
 - `make deb` creates `dist/power-mine_<version>_<arch>.deb`.
 - `make rpm` creates `dist/power-mine-<version>-<release>.<arch>.rpm`.
 - `make windows` creates `dist/power-mine-<version>-windows-amd64-installer.exe` and `dist/power-mine-<version>-windows-amd64.exe` on Windows.
-- `make agent` builds the Fabric in-game Codex agent at `agent/build/libs/power-mine-agent-0.1.0.jar`.
+- `make agent` builds the Fabric in-game Codex agent at `agent/build/libs/power-mine-agent-0.2.0.jar`.
 - `python3 tools/codex/power_mine_mcp.py --pretty diagnose-profile` runs headless mod diagnostics for Codex/local automation.
 - `python3 tools/codex/power_mine_mcp.py --pretty install-java 8` installs the managed Java 8 runtime used by legacy Minecraft and Forge profiles.
 - `python3 tools/codex/power_mine_mcp.py --pretty install-agent --profile-id <profile-id>` installs the built agent into a Fabric `1.20.1` profile.
@@ -101,7 +101,7 @@ On Ubuntu 24.04 or another distro that provides WebKitGTK 4.1 instead of 4.0, in
 
 ## Release Checklist
 
-1. Update the version in `app.go` and `wails.json` (`info.productVersion`).
+1. Update the version in `app.go`, `wails.json` (`info.productVersion`), and `agent/gradle.properties`.
 2. Run `go test ./...`.
 3. Run `npm --prefix frontend run build`.
 4. Run `wails build`.

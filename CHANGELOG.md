@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 - 2026-09-14
+
+Packaging-focused preview release.
+
+- Added Linux `.deb` and `.rpm` packages alongside AppImage builds.
+- Added Windows amd64 portable and NSIS installer builds in GitHub Actions.
+- Added release smoke-test coverage for Debian, Fedora/RPM, Windows 10, and Windows 11.
+- Documented Windows 7 as best-effort and non-blocking for current releases.
+- Updated frontend dependencies and split markdown rendering into a lazy chunk.
+- Improved legacy Forge `1.7.10` installation and Codex/headless launcher tooling.
+
 ## 0.1.0 - 2026-05-22
 
 Initial Power Mine preview release.

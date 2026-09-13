@@ -1807,7 +1807,7 @@ function App() {
                     <div className="brand-mark">PM</div>
                     <div>
                         <strong>{info?.name ?? 'Power Mine'}</strong>
-                        <span>{info?.version ?? '0.1.0'}</span>
+                        <span>{info?.version ?? '0.2.0'}</span>
                     </div>
                 </div>
                 <nav className="nav-list" aria-label="Primary navigation">

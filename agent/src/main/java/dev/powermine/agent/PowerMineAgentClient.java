@@ -106,7 +106,7 @@ public final class PowerMineAgentClient implements ClientModInitializer {
     private JsonObject health(HttpExchange exchange) {
         JsonObject result = ok();
         result.addProperty("name", "power-mine-agent");
-        result.addProperty("version", "0.1.0");
+        result.addProperty("version", "0.2.0");
         result.addProperty("minecraftThread", MinecraftClient.getInstance() != null);
         return result;
     }

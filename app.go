@@ -94,7 +94,7 @@ func (a *App) initServices(ctx context.Context, dataDir string) {
 func (a *App) AppInfo() domain.AppInfo {
 	return domain.AppInfo{
 		Name:    platform.AppName,
-		Version: "0.1.0",
+		Version: "0.2.0",
 	}
 }
 

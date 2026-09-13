@@ -15,7 +15,7 @@ Run these in an elevated PowerShell session for the installer smoke:
 ```powershell
 $ErrorActionPreference = "Stop"
 
-$Version = "0.1.0"
+$Version = "0.2.0"
 $ArtifactDir = "C:\Users\user\Downloads"
 $Installer = Join-Path $ArtifactDir "power-mine-$Version-windows-amd64-installer.exe"
 $Portable = Join-Path $ArtifactDir "power-mine-$Version-windows-amd64.exe"
