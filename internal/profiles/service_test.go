@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestCreateProfileUsesDefaultsAndPersists(t *testing.T) {
 	if profile.Memory != defaults {
 		t.Fatalf("profile memory = %#v, want %#v", profile.Memory, defaults)
 	}
-	wantGameDir := filepath.Join(dataDir, "instances", profile.ID, "minecraft")
+	wantGameDir := filepath.Join(dataDir, "instances", "fabric-survival", "minecraft")
 	if profile.GameDir != wantGameDir {
 		t.Fatalf("profile GameDir = %q, want %q", profile.GameDir, wantGameDir)
 	}
@@ -42,6 +43,74 @@ func TestCreateProfileUsesDefaultsAndPersists(t *testing.T) {
 	}
 	if len(list.Profiles) != 1 {
 		t.Fatalf("profile count = %d, want 1", len(list.Profiles))
+	}
+}
+
+func TestCreateProfileDeduplicatesDefaultGameDir(t *testing.T) {
+	dataDir := t.TempDir()
+	service := NewService(dataDir)
+	defaults := domain.MemorySettings{MinMB: 1024, MaxMB: 4096}
+	input := domain.ProfileInput{
+		Name:             "Fabric Survival",
+		MinecraftVersion: "1.21.5",
+		Loader:           domain.LoaderConfig{Type: domain.LoaderFabric, Version: "0.16.14"},
+	}
+
+	first, err := service.Create(input, defaults)
+	if err != nil {
+		t.Fatalf("Create first returned error: %v", err)
+	}
+	second, err := service.Create(input, defaults)
+	if err != nil {
+		t.Fatalf("Create second returned error: %v", err)
+	}
+
+	if first.GameDir != filepath.Join(dataDir, "instances", "fabric-survival", "minecraft") {
+		t.Fatalf("first GameDir = %q", first.GameDir)
+	}
+	if second.GameDir != filepath.Join(dataDir, "instances", "fabric-survival-2", "minecraft") {
+		t.Fatalf("second GameDir = %q", second.GameDir)
+	}
+}
+
+func TestCreateProfileAvoidsExistingInstanceDirectory(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dataDir, "instances", "fabric-survival"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(dataDir)
+
+	profile, err := service.Create(domain.ProfileInput{
+		Name:             "Fabric Survival",
+		MinecraftVersion: "1.21.5",
+		Loader:           domain.LoaderConfig{Type: domain.LoaderVanilla},
+	}, domain.MemorySettings{MinMB: 1024, MaxMB: 4096})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	wantGameDir := filepath.Join(dataDir, "instances", "fabric-survival-2", "minecraft")
+	if profile.GameDir != wantGameDir {
+		t.Fatalf("profile GameDir = %q, want %q", profile.GameDir, wantGameDir)
+	}
+}
+
+func TestCreateProfileHonorsCustomGameDir(t *testing.T) {
+	dataDir := t.TempDir()
+	customGameDir := filepath.Join(dataDir, "custom", "minecraft")
+	service := NewService(dataDir)
+
+	profile, err := service.Create(domain.ProfileInput{
+		Name:             "Fabric Survival",
+		MinecraftVersion: "1.21.5",
+		Loader:           domain.LoaderConfig{Type: domain.LoaderVanilla},
+		GameDir:          customGameDir,
+	}, domain.MemorySettings{MinMB: 1024, MaxMB: 4096})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if profile.GameDir != customGameDir {
+		t.Fatalf("profile GameDir = %q, want %q", profile.GameDir, customGameDir)
 	}
 }
 

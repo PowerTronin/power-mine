@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"power-mine/internal/domain"
 	"power-mine/internal/platform"
@@ -18,6 +20,8 @@ var (
 	ErrProfileNotFound = errors.New("profile not found")
 	ErrInvalidProfile  = errors.New("invalid profile")
 )
+
+const maxInstanceNameLength = 64
 
 type fileData struct {
 	SelectedProfileID string           `json:"selectedProfileId"`
@@ -81,7 +85,7 @@ func (s *Service) Create(input domain.ProfileInput, defaults domain.MemorySettin
 
 	gameDir := strings.TrimSpace(input.GameDir)
 	if gameDir == "" {
-		gameDir = platform.ProfileGameDir(s.dataDir, id)
+		gameDir = s.defaultGameDir(data, input.Name, "")
 	}
 
 	profile := domain.Profile{
@@ -131,7 +135,7 @@ func (s *Service) Update(id string, input domain.ProfileInput, defaults domain.M
 		data.Profiles[index].Loader = normalizeLoader(input.Loader)
 		data.Profiles[index].GameDir = strings.TrimSpace(input.GameDir)
 		if data.Profiles[index].GameDir == "" {
-			data.Profiles[index].GameDir = platform.ProfileGameDir(s.dataDir, id)
+			data.Profiles[index].GameDir = s.defaultGameDir(data, input.Name, id)
 		}
 		data.Profiles[index].Memory = normalizeMemory(input.Memory)
 		data.Profiles[index].UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -245,6 +249,104 @@ func (s *Service) write(data fileData) error {
 		data.Profiles = []domain.Profile{}
 	}
 	return storage.WriteJSON(s.path, data)
+}
+
+func (s *Service) defaultGameDir(data fileData, profileName string, excludeProfileID string) string {
+	baseName := instanceNameSlug(profileName)
+	for suffix := 0; ; suffix++ {
+		instanceName := instanceNameWithSuffix(baseName, suffix)
+		gameDir := platform.ProfileGameDir(s.dataDir, instanceName)
+		if gameDirUsedByAnotherProfile(data, gameDir, excludeProfileID) {
+			continue
+		}
+		if !gameDirOwnedByProfile(data, gameDir, excludeProfileID) && pathExists(filepath.Dir(gameDir)) {
+			continue
+		}
+		return gameDir
+	}
+}
+
+func gameDirUsedByAnotherProfile(data fileData, gameDir string, excludeProfileID string) bool {
+	for _, profile := range data.Profiles {
+		if profile.ID == excludeProfileID {
+			continue
+		}
+		if samePath(profile.GameDir, gameDir) {
+			return true
+		}
+	}
+	return false
+}
+
+func gameDirOwnedByProfile(data fileData, gameDir string, profileID string) bool {
+	if profileID == "" {
+		return false
+	}
+	for _, profile := range data.Profiles {
+		if profile.ID == profileID && samePath(profile.GameDir, gameDir) {
+			return true
+		}
+	}
+	return false
+}
+
+func samePath(left string, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func instanceNameSlug(name string) string {
+	name = strings.TrimSpace(name)
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			builder.WriteRune(unicode.ToLower(r))
+			lastDash = false
+			continue
+		}
+		if builder.Len() > 0 && !lastDash {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+	slug := strings.Trim(builder.String(), "- .")
+	if slug == "" {
+		slug = "profile"
+	}
+	return trimInstanceName(slug, maxInstanceNameLength)
+}
+
+func instanceNameWithSuffix(baseName string, suffix int) string {
+	if suffix == 0 {
+		return baseName
+	}
+	suffixText := fmt.Sprintf("-%d", suffix+1)
+	return trimInstanceName(baseName, maxInstanceNameLength-len(suffixText)) + suffixText
+}
+
+func trimInstanceName(name string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return "profile"
+	}
+	runes := []rune(name)
+	if len(runes) > maxRunes {
+		runes = runes[:maxRunes]
+	}
+	trimmed := strings.Trim(string(runes), "- .")
+	if trimmed == "" {
+		return "profile"
+	}
+	return trimmed
 }
 
 func validateInput(input domain.ProfileInput) error {
