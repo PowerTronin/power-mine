@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,9 +26,13 @@ const (
 	minecraftLibrariesURL = "https://libraries.minecraft.net"
 	fabricMetaURL         = "https://meta.fabricmc.net/v2/versions/loader"
 	quiltMetaURL          = "https://meta.quiltmc.org/v3/versions/loader"
-	downloadTimeout       = 2 * time.Minute
-	downloadAttempts      = 3
-	downloadRetryDelay    = 750 * time.Millisecond
+	fabricMavenMirrorURL  = "https://maven2.fabricmc.net"
+	mavenCentralBaseURL   = "https://repo.maven.apache.org/maven2"
+	mavenCentralMirrorURL = "https://repo1.maven.org/maven2"
+	downloadTimeout       = 10 * time.Minute
+	responseHeaderTimeout = 15 * time.Second
+	downloadAttempts      = 4
+	downloadRetryDelay    = time.Second
 )
 
 type ProgressFunc func(domain.InstallProgress)
@@ -47,6 +52,7 @@ func NewService(dataDir string) *Service {
 func minecraftHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSHandshakeTimeout = 30 * time.Second
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
 	return &http.Client{
 		Timeout:   downloadTimeout,
 		Transport: transport,
@@ -666,6 +672,41 @@ func (s *Service) ensureDownload(ctx context.Context, item downloadItem) error {
 }
 
 func (s *Service) downloadItem(ctx context.Context, item downloadItem) error {
+	return s.downloadItemFromURLs(ctx, item, downloadURLs(item))
+}
+
+func (s *Service) downloadItemFromURLs(ctx context.Context, item downloadItem, urls []string) error {
+	var lastErr error
+	var retryableErr error
+	for _, itemURL := range urls {
+		itemURL = strings.TrimSpace(itemURL)
+		if itemURL == "" {
+			continue
+		}
+		item.URL = itemURL
+		if err := s.downloadItemOnce(ctx, item); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			urlErr := fmt.Errorf("%s: %w", itemURL, err)
+			lastErr = urlErr
+			if retryableNetworkError(urlErr) {
+				retryableErr = urlErr
+			}
+			continue
+		}
+		return nil
+	}
+	if retryableErr != nil {
+		return retryableErr
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return errors.New("missing download URL")
+}
+
+func (s *Service) downloadItemOnce(ctx context.Context, item downloadItem) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, item.URL, nil)
 	if err != nil {
 		return err
@@ -714,6 +755,48 @@ func (s *Service) downloadItem(ctx context.Context, item downloadItem) error {
 	}
 	removeTemp = false
 	return nil
+}
+
+func downloadURLs(item downloadItem) []string {
+	urls := appendUniqueURL(nil, item.URL)
+	for _, fallbackURL := range fabricMavenFallbackURLs(item.URL) {
+		urls = appendUniqueURL(urls, fallbackURL)
+	}
+	return urls
+}
+
+func fabricMavenFallbackURLs(rawURL string) []string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "maven.fabricmc.net") {
+		return nil
+	}
+	artifactPath := strings.TrimPrefix(parsed.EscapedPath(), "/")
+	if artifactPath == "" {
+		return nil
+	}
+
+	fallbacks := make([]string, 0, 3)
+	for _, baseURL := range []string{fabricMavenMirrorURL, mavenCentralBaseURL, mavenCentralMirrorURL} {
+		baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+		if baseURL == "" {
+			continue
+		}
+		fallbacks = append(fallbacks, baseURL+"/"+artifactPath)
+	}
+	return fallbacks
+}
+
+func appendUniqueURL(urls []string, rawURL string) []string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return urls
+	}
+	for _, existing := range urls {
+		if existing == rawURL {
+			return urls
+		}
+	}
+	return append(urls, rawURL)
 }
 
 func (s *Service) getRaw(ctx context.Context, url string) ([]byte, error) {

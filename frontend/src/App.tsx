@@ -136,7 +136,6 @@ const navItems: Array<{ id: Screen; label: string; mark: string }> = [
     {id: 'home', label: 'Home', mark: 'H'},
     {id: 'library', label: 'Library', mark: 'L'},
     {id: 'create', label: 'Create', mark: '+'},
-    {id: 'account', label: 'Account', mark: 'A'},
     {id: 'logs', label: 'Logs', mark: 'G'},
     {id: 'settings', label: 'Settings', mark: 'S'},
     {id: 'browse', label: 'Browse', mark: 'B'},
@@ -1803,37 +1802,63 @@ function App() {
     return (
         <div className="app-shell">
             <aside className="rail">
-                <div className="brand">
-                    <div className="brand-mark">PM</div>
-                    <div>
-                        <strong>{info?.name ?? 'Power Mine'}</strong>
-                        <span>{info?.version ?? '0.2.0'}</span>
+                <div className="rail-main">
+                    <div className="brand">
+                        <div className="brand-mark">PM</div>
+                        <div>
+                            <strong>{info?.name ?? 'Power Mine'}</strong>
+                            <span>version: {info?.version ?? '0.2.0'}</span>
+                        </div>
                     </div>
+
+                    <nav className="nav-list" aria-label="Primary navigation">
+                        {navItems.map((item) => {
+                            const active = screen === item.id;
+                            return (
+                                <button
+                                    key={item.id}
+                                    type="button"
+                                    className={active ? 'nav-item active' : 'nav-item'}
+                                    onClick={() => setScreen(item.id)}
+                                    aria-current={active ? 'page' : undefined}
+                                >
+                                    <span className="nav-mark">{item.mark}</span>
+                                    <strong>{item.label}</strong>
+                                    {active && <em>ACTIVE</em>}
+                                </button>
+                            );
+                        })}
+                    </nav>
                 </div>
-                <nav className="nav-list" aria-label="Primary navigation">
-                    {navItems.map((item) => (
-                        <button
-                            key={item.id}
-                            type="button"
-                            className={screen === item.id ? 'nav-item active' : 'nav-item'}
-                            onClick={() => setScreen(item.id)}
-                        >
-                            <span>{item.mark}</span>
-                            {item.label}
-                        </button>
-                    ))}
-                </nav>
+
+                <button
+                    className={screen === 'account' ? 'rail-card rail-card-button active' : 'rail-card rail-card-button'}
+                    type="button"
+                    onClick={() => setScreen('account')}
+                    aria-current={screen === 'account' ? 'page' : undefined}
+                    aria-label="Open account settings"
+                >
+                    <p className="eyebrow">Account</p>
+                    <strong>{accountLabel(account)}</strong>
+                    <span>{account.mode === 'microsoft' ? 'mode: microsoft' : 'mode: offline'}</span>
+                </button>
             </aside>
 
             <main className="workspace">
                 <header className="topbar">
                     <div>
-                        <p className="eyebrow">macOS + Linux MVP</p>
+                        <p className="eyebrow">Power Mine // Launcher</p>
                         <h1>{titleFor(screen)}</h1>
+                        <p className="topbar-subtitle">Minecraft Java control surface for profiles, mods, logs, and runtime checks.</p>
                     </div>
-                    <div className="account-pill">
-                        <span className="status-dot"/>
-                        {accountLabel(account)}
+                    <div className="topbar-meta">
+                        <div className="account-pill">
+                            <span className="status-dot"/>
+                            {accountLabel(account)}
+                        </div>
+                        <div className="account-pill muted-pill">
+                            build {info?.version ?? '0.2.0'}
+                        </div>
                     </div>
                 </header>
 

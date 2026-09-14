@@ -2,6 +2,11 @@ package minecraft
 
 import (
 	"archive/zip"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -262,6 +267,82 @@ func TestNormalizeLibraryDownloads(t *testing.T) {
 	}
 	if got := fallbacks[1].Downloads.Artifact.URL; got != "https://maven.minecraftforge.net/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10.jar" {
 		t.Fatalf("default Forge library URL = %q", got)
+	}
+}
+
+func TestDownloadURLsAddMavenCentralFallbackForFabricThirdPartyLibrary(t *testing.T) {
+	item := downloadItem{URL: "https://maven.fabricmc.net/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar"}
+
+	got := downloadURLs(item)
+
+	want := []string{
+		"https://maven.fabricmc.net/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar",
+		"https://maven2.fabricmc.net/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar",
+		"https://repo.maven.apache.org/maven2/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar",
+		"https://repo1.maven.org/maven2/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("download URLs = %#v, want %#v", got, want)
+	}
+}
+
+func TestDownloadURLsAddFabricMirrorForFabricArtifacts(t *testing.T) {
+	item := downloadItem{URL: "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar"}
+
+	got := downloadURLs(item)
+
+	want := []string{
+		"https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar",
+		"https://maven2.fabricmc.net/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar",
+		"https://repo.maven.apache.org/maven2/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar",
+		"https://repo1.maven.org/maven2/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("download URLs = %#v, want %#v", got, want)
+	}
+}
+
+func TestDownloadItemUsesFallbackURL(t *testing.T) {
+	payload := []byte("library bytes")
+	hash := sha1.Sum(payload)
+	primaryHits := 0
+	fallbackUserAgent := ""
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryHits++
+		http.Error(w, "mirror unavailable", http.StatusBadGateway)
+	}))
+	defer primary.Close()
+
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackUserAgent = r.Header.Get("User-Agent")
+		_, _ = w.Write(payload)
+	}))
+	defer fallback.Close()
+
+	service := NewService(t.TempDir())
+	target := filepath.Join(t.TempDir(), "artifact.jar")
+	item := downloadItem{
+		Path: target,
+		SHA1: hex.EncodeToString(hash[:]),
+		Size: int64(len(payload)),
+	}
+
+	if err := service.downloadItemFromURLs(context.Background(), item, []string{primary.URL + "/artifact.jar", fallback.URL + "/artifact.jar"}); err != nil {
+		t.Fatalf("downloadItemFromURLs returned error: %v", err)
+	}
+	if primaryHits != 1 {
+		t.Fatalf("primary hits = %d, want 1", primaryHits)
+	}
+	if fallbackUserAgent == "" {
+		t.Fatal("fallback request missing user agent")
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read downloaded artifact: %v", err)
+	}
+	if string(raw) != string(payload) {
+		t.Fatalf("downloaded artifact = %q, want %q", raw, payload)
 	}
 }
 
