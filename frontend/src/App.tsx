@@ -203,6 +203,7 @@ function App() {
     const [versionCatalogStatus, setVersionCatalogStatus] = useState('Catalog not loaded');
     const [versionCatalogWarning, setVersionCatalogWarning] = useState('');
     const [modpackImporting, setModpackImporting] = useState(false);
+    const [appRefreshing, setAppRefreshing] = useState(false);
     const [createForm, setCreateForm] = useState(defaultCreateForm);
 
     const selectedProfile = useMemo(
@@ -368,6 +369,49 @@ function App() {
                 source: 'App',
                 message: `Failed to load app state: ${errorText(err)}`,
             });
+        }
+    }
+
+    async function refreshVisibleState() {
+        const profileId = selectedProfile?.id ?? selectedProfileId;
+        try {
+            setAppRefreshing(true);
+            setError('');
+            setMessage('');
+            await refreshApp();
+            await validateJava();
+            if (profileId) {
+                await Promise.all([
+                    refreshProfileJavaRuntime(profileId),
+                    refreshProfileMods(profileId),
+                    refreshInstalledModrinthProjects(profileId),
+                    refreshModrinthUpdates(profileId),
+                ]);
+                if (screen === 'logs') {
+                    await refreshProfileGameLogs(profileId);
+                }
+            }
+            if (screen === 'create') {
+                await refreshVersionOptions();
+            }
+            setMessage('Launcher state refreshed.');
+            appendLog({
+                level: 'success',
+                source: 'App',
+                message: 'Manual refresh complete.',
+                profileId,
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'App',
+                message: `Manual refresh failed: ${text}`,
+                profileId,
+            });
+        } finally {
+            setAppRefreshing(false);
         }
     }
 
@@ -1859,6 +1903,9 @@ function App() {
                         <div className="account-pill muted-pill">
                             build {info?.version ?? '0.2.0'}
                         </div>
+                        <button type="button" onClick={refreshVisibleState} disabled={appRefreshing}>
+                            {appRefreshing ? 'Refreshing' : 'Refresh'}
+                        </button>
                     </div>
                 </header>
 
