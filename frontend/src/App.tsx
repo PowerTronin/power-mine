@@ -7,6 +7,7 @@ import {
     DeleteModrinthModFiles,
     DeleteProfileMod,
     ExportModrinthModpack,
+    ExportProfileLogs,
     GetAccount,
     GetCachedVersionCatalog,
     GetModrinthProject,
@@ -182,6 +183,7 @@ function App() {
     const [profileSettingsDraft, setProfileSettingsDraft] = useState<ProfileSettingsDraft | null>(null);
     const [modActionKey, setModActionKey] = useState('');
     const [gameLogActionKey, setGameLogActionKey] = useState('');
+    const [logsWindowOpen, setLogsWindowOpen] = useState(false);
     const [browseProfileId, setBrowseProfileId] = useState('');
     const [browseQuery, setBrowseQuery] = useState('');
     const [browseResults, setBrowseResults] = useState<domain.ModrinthSearchResult | null>(null);
@@ -1088,6 +1090,45 @@ function App() {
                 level: 'error',
                 source: 'Game Logs',
                 message: `Open logs folder failed: ${text}`,
+                profileId,
+            });
+        } finally {
+            setGameLogActionKey('');
+        }
+    }
+
+    async function exportProfileLogs(profileId: string) {
+        const action = `${profileId}:logs:export`;
+        try {
+            setError('');
+            setMessage('');
+            setGameLogActionKey(action);
+            const result = await ExportProfileLogs(profileId, launcherLogExportText(launcherLogs, profiles));
+            if (!result.path) {
+                appendLog({
+                    level: 'info',
+                    source: 'Game Logs',
+                    message: 'Log export cancelled.',
+                    profileId,
+                });
+                return;
+            }
+            await refreshProfileGameLogs(profileId);
+            const text = logExportMessage(result);
+            setMessage(text);
+            appendLog({
+                level: 'success',
+                source: 'Game Logs',
+                message: text,
+                profileId,
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Game Logs',
+                message: `Log export failed: ${text}`,
                 profileId,
             });
         } finally {
@@ -2167,10 +2208,13 @@ function App() {
                         gameLogLists={profileGameLogLists}
                         gameLogContents={profileGameLogContents}
                         gameLogActionKey={gameLogActionKey}
+                        exportProfileId={selectedProfile?.id ?? selectedProfileId}
                         onClearLogs={() => setLauncherLogs([])}
                         onRefreshGameLogs={refreshProfileGameLogs}
                         onReadGameLog={readProfileGameLog}
                         onOpenLogsFolder={openProfileLogsFolder}
+                        onOpenWindow={() => setLogsWindowOpen(true)}
+                        onExportLogs={exportProfileLogs}
                     />
                 )}
 
@@ -2306,6 +2350,22 @@ function App() {
                             : pendingModrinthUpdate.currentFileName)}
                         onCancel={cancelPendingModrinthUpdate}
                         onConfirm={confirmPendingModrinthUpdate}
+                    />
+                )}
+                {logsWindowOpen && (
+                    <LogsWindowDialog
+                        logs={launcherLogs}
+                        profiles={profiles}
+                        gameLogLists={profileGameLogLists}
+                        gameLogContents={profileGameLogContents}
+                        gameLogActionKey={gameLogActionKey}
+                        exportProfileId={selectedProfile?.id ?? selectedProfileId}
+                        onClearLogs={() => setLauncherLogs([])}
+                        onRefreshGameLogs={refreshProfileGameLogs}
+                        onReadGameLog={readProfileGameLog}
+                        onOpenLogsFolder={openProfileLogsFolder}
+                        onExportLogs={exportProfileLogs}
+                        onClose={() => setLogsWindowOpen(false)}
                     />
                 )}
             </main>
@@ -3941,20 +4001,26 @@ function ClassicLogsPanel({
     gameLogLists,
     gameLogContents,
     gameLogActionKey,
+    exportProfileId,
     onClearLogs,
     onRefreshGameLogs,
     onReadGameLog,
-    onOpenLogsFolder
+    onOpenLogsFolder,
+    onOpenWindow,
+    onExportLogs
 }: {
     logs: LauncherLog[];
     profiles: domain.Profile[];
     gameLogLists: Record<string, domain.GameLogList>;
     gameLogContents: Record<string, domain.GameLogContent>;
     gameLogActionKey: string;
+    exportProfileId: string;
     onClearLogs: () => void;
     onRefreshGameLogs: (profileId: string) => void;
     onReadGameLog: (profileId: string, fileName: string) => void;
     onOpenLogsFolder: (profileId: string) => void;
+    onOpenWindow?: () => void;
+    onExportLogs: (profileId: string) => void;
 }) {
     const [mode, setMode] = useState<LogsMode>('launcher');
     const [profileFilter, setProfileFilter] = useState('all');
@@ -3972,6 +4038,7 @@ function ClassicLogsPanel({
     );
     const gameLogList = gameProfile ? gameLogLists[gameProfile.id] : undefined;
     const gameFiles = gameLogList?.files ?? [];
+    const exportProfile = profiles.find((profile) => profile.id === exportProfileId) ?? gameProfile;
     const liveGameLogs = useMemo(() => {
         if (!gameProfile) {
             return [];
@@ -4195,6 +4262,14 @@ function ClassicLogsPanel({
                         <p>{filteredLogs.length} visible events{errorCount > 0 ? ` / ${errorCount} errors` : ''}</p>
                     </div>
                     <div className="logs-actions">
+                        {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open window</button>}
+                        <button
+                            type="button"
+                            disabled={!exportProfile || gameLogActionKey === `${exportProfile?.id}:logs:export`}
+                            onClick={() => exportProfile && onExportLogs(exportProfile.id)}
+                        >
+                            {exportProfile && gameLogActionKey === `${exportProfile.id}:logs:export` ? 'Exporting' : 'Export ZIP'}
+                        </button>
                         <button type="button" onClick={copyVisibleLogs} disabled={consoleLogs.length === 0}>Copy visible</button>
                         <button className="danger" type="button" onClick={clearLogs} disabled={logs.length === 0}>Clear</button>
                     </div>
@@ -4259,6 +4334,7 @@ function ClassicLogsPanel({
                                 <p>{gameLogStatusText(gameProfile, gameLogList, selectedGameContent, liveGameLogs, gameFileName)}</p>
                             </div>
                             <div className="logs-actions">
+                                {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open window</button>}
                                 <button type="button" disabled={!gameProfile} onClick={copyGameLog}>Copy visible</button>
                                 <button
                                     type="button"
@@ -4266,6 +4342,13 @@ function ClassicLogsPanel({
                                     onClick={() => gameProfile && onRefreshGameLogs(gameProfile.id)}
                                 >
                                     {gameProfile && gameLogActionKey === `${gameProfile.id}:logs:refresh` ? 'Refreshing' : 'Refresh'}
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={!gameProfile || gameLogActionKey === `${gameProfile?.id}:logs:export`}
+                                    onClick={() => gameProfile && onExportLogs(gameProfile.id)}
+                                >
+                                    {gameProfile && gameLogActionKey === `${gameProfile.id}:logs:export` ? 'Exporting' : 'Export ZIP'}
                                 </button>
                                 <button
                                     type="button"
@@ -4336,6 +4419,61 @@ function ClassicLogsPanel({
                 )}
             </section>
         </section>
+    );
+}
+
+function LogsWindowDialog({
+    logs,
+    profiles,
+    gameLogLists,
+    gameLogContents,
+    gameLogActionKey,
+    exportProfileId,
+    onClearLogs,
+    onRefreshGameLogs,
+    onReadGameLog,
+    onOpenLogsFolder,
+    onExportLogs,
+    onClose
+}: {
+    logs: LauncherLog[];
+    profiles: domain.Profile[];
+    gameLogLists: Record<string, domain.GameLogList>;
+    gameLogContents: Record<string, domain.GameLogContent>;
+    gameLogActionKey: string;
+    exportProfileId: string;
+    onClearLogs: () => void;
+    onRefreshGameLogs: (profileId: string) => void;
+    onReadGameLog: (profileId: string, fileName: string) => void;
+    onOpenLogsFolder: (profileId: string) => void;
+    onExportLogs: (profileId: string) => void;
+    onClose: () => void;
+}) {
+    return (
+        <div className="modal-backdrop logs-window-backdrop" role="dialog" aria-modal="true" aria-label="Logs window">
+            <section className="logs-window">
+                <header className="logs-window-header">
+                    <div>
+                        <p className="eyebrow">Detached panel</p>
+                        <h2>Logs window</h2>
+                    </div>
+                    <button type="button" onClick={onClose}>Close</button>
+                </header>
+                <ClassicLogsPanel
+                    logs={logs}
+                    profiles={profiles}
+                    gameLogLists={gameLogLists}
+                    gameLogContents={gameLogContents}
+                    gameLogActionKey={gameLogActionKey}
+                    exportProfileId={exportProfileId}
+                    onClearLogs={onClearLogs}
+                    onRefreshGameLogs={onRefreshGameLogs}
+                    onReadGameLog={onReadGameLog}
+                    onOpenLogsFolder={onOpenLogsFolder}
+                    onExportLogs={onExportLogs}
+                />
+            </section>
+        </div>
     );
 }
 
@@ -4414,6 +4552,16 @@ function logProfileLabel(log: LauncherLog, profilesById: Map<string, domain.Prof
 
 function formatLauncherLogLine(log: LauncherLog, profilesById: Map<string, domain.Profile>) {
     return `[${log.time}] [${log.level.toUpperCase()}] [${log.source}] [${logProfileLabel(log, profilesById)}] ${log.message}`;
+}
+
+function launcherLogExportText(logs: LauncherLog[], profiles: domain.Profile[]) {
+    const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
+    return [...logs].reverse().map((log) => formatLauncherLogLine(log, profilesById)).join('\n');
+}
+
+function logExportMessage(result: domain.LogExportResult) {
+    const launcher = result.launcherEventsExported ? ' plus launcher events' : '';
+    return `Exported ${result.filesExported} log files${launcher} to ${result.path}.`;
 }
 
 function gameLogContentKey(profileId: string, fileName: string) {

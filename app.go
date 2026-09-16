@@ -490,6 +490,40 @@ func (a *App) ExportModrinthModpack(id string) (domain.ModpackExportResult, erro
 	}, nil
 }
 
+func (a *App) ExportProfileLogs(id string, launcherEvents string) (domain.LogExportResult, error) {
+	if err := a.ensureReady(); err != nil {
+		return domain.LogExportResult{}, err
+	}
+	profile, err := a.profileService.Get(id)
+	if err != nil {
+		return domain.LogExportResult{}, err
+	}
+
+	options := wailsruntime.SaveDialogOptions{
+		Title:           "Export profile logs",
+		DefaultFilename: logsDefaultFilename(profile.Name),
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "ZIP archives (*.zip)", Pattern: "*.zip"},
+		},
+	}
+	if info, err := os.Stat(profile.GameDir); err == nil && info.IsDir() {
+		options.DefaultDirectory = profile.GameDir
+	}
+
+	targetPath, err := wailsruntime.SaveFileDialog(a.ctx, options)
+	if err != nil {
+		return domain.LogExportResult{}, err
+	}
+	if targetPath == "" {
+		return domain.LogExportResult{ProfileID: profile.ID, Name: profile.Name}, nil
+	}
+	if !strings.EqualFold(filepath.Ext(targetPath), ".zip") {
+		targetPath += ".zip"
+	}
+
+	return a.minecraftService.ExportGameLogs(profile, targetPath, launcherEvents)
+}
+
 func (a *App) SetProfileModEnabled(id string, fileName string, enabled bool) (domain.ModList, error) {
 	if err := a.ensureReady(); err != nil {
 		return domain.ModList{}, err
@@ -2146,6 +2180,14 @@ func modpackDefaultFilename(name string) string {
 		base = "modpack"
 	}
 	return base + ".mrpack"
+}
+
+func logsDefaultFilename(name string) string {
+	base := strings.TrimSuffix(modpackDefaultFilename(name), ".mrpack")
+	if base == "" {
+		base = "profile"
+	}
+	return base + "-logs.zip"
 }
 
 func (a *App) modrinthExportFiles(profile domain.Profile) []modpacks.ExportFile {

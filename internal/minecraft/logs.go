@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"archive/zip"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -117,6 +118,108 @@ func (s *Service) ReadGameLog(profile domain.Profile, fileName string) (domain.G
 	}, nil
 }
 
+func (s *Service) ExportGameLogs(profile domain.Profile, targetPath string, launcherEvents string) (domain.LogExportResult, error) {
+	gameDir := strings.TrimSpace(profile.GameDir)
+	if gameDir == "" {
+		return domain.LogExportResult{}, fmt.Errorf("profile game directory is empty")
+	}
+	targetPath = strings.TrimSpace(targetPath)
+	if targetPath == "" {
+		return domain.LogExportResult{}, fmt.Errorf("log export target is empty")
+	}
+
+	list, err := s.ListGameLogs(profile)
+	if err != nil {
+		return domain.LogExportResult{}, err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return domain.LogExportResult{}, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(targetPath), filepath.Base(targetPath)+".*.part")
+	if err != nil {
+		return domain.LogExportResult{}, err
+	}
+	tmpName := tmp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	writer := zip.NewWriter(tmp)
+	filesExported := 0
+	for _, file := range list.Files {
+		sourcePath := filepath.Join(gameDir, filepath.FromSlash(file.FileName))
+		info, err := os.Stat(sourcePath)
+		if err != nil {
+			_ = writer.Close()
+			_ = tmp.Close()
+			return domain.LogExportResult{}, err
+		}
+		if info.IsDir() {
+			continue
+		}
+		if err := writeLogZipFile(writer, sourcePath, "game/"+file.FileName, info); err != nil {
+			_ = writer.Close()
+			_ = tmp.Close()
+			return domain.LogExportResult{}, err
+		}
+		filesExported++
+	}
+
+	launcherEvents = strings.TrimRight(launcherEvents, "\r\n")
+	launcherEventsExported := launcherEvents != ""
+	if launcherEventsExported {
+		if err := writeLogZipBytes(writer, "launcher-events.log", []byte(launcherEvents+"\n")); err != nil {
+			_ = writer.Close()
+			_ = tmp.Close()
+			return domain.LogExportResult{}, err
+		}
+	}
+
+	manifest := fmt.Sprintf("Power Mine log export\nProfile: %s\nProfile ID: %s\nExported at: %s\nGame log files: %d\nLauncher events: %t\n",
+		profile.Name,
+		profile.ID,
+		time.Now().UTC().Format(time.RFC3339),
+		filesExported,
+		launcherEventsExported,
+	)
+	if err := writeLogZipBytes(writer, "manifest.txt", []byte(manifest)); err != nil {
+		_ = writer.Close()
+		_ = tmp.Close()
+		return domain.LogExportResult{}, err
+	}
+
+	if err := writer.Close(); err != nil {
+		_ = tmp.Close()
+		return domain.LogExportResult{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return domain.LogExportResult{}, err
+	}
+	if _, err := os.Stat(targetPath); err == nil {
+		if err := os.Remove(targetPath); err != nil {
+			return domain.LogExportResult{}, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return domain.LogExportResult{}, err
+	}
+	if err := os.Rename(tmpName, targetPath); err != nil {
+		return domain.LogExportResult{}, err
+	}
+	removeTemp = false
+
+	return domain.LogExportResult{
+		ProfileID:              profile.ID,
+		Name:                   profile.Name,
+		Path:                   targetPath,
+		FilesExported:          filesExported,
+		LauncherEventsExported: launcherEventsExported,
+	}, nil
+}
+
 func isRegularLogName(name string) bool {
 	lower := strings.ToLower(name)
 	return strings.HasSuffix(lower, ".log") || strings.HasSuffix(lower, ".log.gz")
@@ -205,4 +308,52 @@ func readCompressedGameLog(path string) (string, bool, error) {
 		raw = raw[:maxGameLogReadBytes]
 	}
 	return string(raw), truncated, nil
+}
+
+func writeLogZipFile(writer *zip.Writer, sourcePath string, archivePath string, info os.FileInfo) error {
+	cleanPath, err := cleanLogArchivePath(archivePath)
+	if err != nil {
+		return err
+	}
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	header.Name = cleanPath
+	header.Method = zip.Deflate
+
+	entry, err := writer.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+	file, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = io.Copy(entry, file)
+	return err
+}
+
+func writeLogZipBytes(writer *zip.Writer, archivePath string, body []byte) error {
+	cleanPath, err := cleanLogArchivePath(archivePath)
+	if err != nil {
+		return err
+	}
+	header := &zip.FileHeader{Name: cleanPath, Method: zip.Deflate}
+	header.SetModTime(time.Now().UTC())
+	entry, err := writer.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+	_, err = entry.Write(body)
+	return err
+}
+
+func cleanLogArchivePath(archivePath string) (string, error) {
+	cleanPath := filepath.ToSlash(filepath.Clean(filepath.FromSlash(archivePath)))
+	if cleanPath == "." || !filepath.IsLocal(filepath.FromSlash(cleanPath)) {
+		return "", fmt.Errorf("invalid log archive path: %s", archivePath)
+	}
+	return cleanPath, nil
 }

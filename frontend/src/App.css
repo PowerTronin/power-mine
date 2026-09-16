@@ -1226,6 +1226,52 @@ button.small {
     background: rgb(0 0 0 / 58%);
 }
 
+.logs-window-backdrop {
+    align-items: stretch;
+    justify-items: stretch;
+}
+
+.logs-window {
+    width: min(1280px, 100%);
+    max-height: calc(100vh - 48px);
+    margin: auto;
+    border: 1px solid #3d4738;
+    border-radius: 10px;
+    background: #11150f;
+    box-shadow: 0 18px 58px rgb(0 0 0 / 55%);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.logs-window-header {
+    border-bottom: 1px solid #30382d;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.logs-window-header h2 {
+    margin: 0;
+    font-size: 24px;
+}
+
+.logs-window .classic-logs {
+    min-height: 0;
+    flex: 1;
+    padding: 16px;
+}
+
+.logs-window .logs-sidebar {
+    max-height: none;
+}
+
+.logs-window .logs-console {
+    min-height: 0;
+}
+
 .confirm-dialog {
     width: min(560px, 100%);
     max-height: calc(100vh - 48px);
@@ -1650,6 +1696,14 @@ input:disabled {
 
     .logs-console-header {
         flex-direction: column;
+    }
+
+    .logs-window-backdrop {
+        padding: 10px;
+    }
+
+    .logs-window .classic-logs {
+        padding: 10px;
     }
 
     .logs-actions {

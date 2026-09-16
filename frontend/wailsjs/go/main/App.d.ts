@@ -16,6 +16,8 @@ export function DeleteProfileMod(arg1:string,arg2:string):Promise<domain.ModList
 
 export function ExportModrinthModpack(arg1:string):Promise<domain.ModpackExportResult>;
 
+export function ExportProfileLogs(arg1:string,arg2:string):Promise<domain.LogExportResult>;
+
 export function GetAccount():Promise<domain.AccountConfig>;
 
 export function GetCachedVersionCatalog():Promise<domain.VersionCatalog>;

@@ -190,6 +190,26 @@ export namespace domain {
 	        this.version = source["version"];
 	    }
 	}
+	export class LogExportResult {
+	    profileId: string;
+	    name: string;
+	    path?: string;
+	    filesExported: number;
+	    launcherEventsExported: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new LogExportResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profileId = source["profileId"];
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.filesExported = source["filesExported"];
+	        this.launcherEventsExported = source["launcherEventsExported"];
+	    }
+	}
 	export class MemorySettings {
 	    minMB: number;
 	    maxMB: number;
@@ -1183,4 +1203,3 @@ export namespace domain {
 	}
 
 }
-

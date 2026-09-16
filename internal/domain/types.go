@@ -169,6 +169,14 @@ type GameLogContent struct {
 	MaxBytes    int64  `json:"maxBytes"`
 }
 
+type LogExportResult struct {
+	ProfileID              string `json:"profileId"`
+	Name                   string `json:"name"`
+	Path                   string `json:"path,omitempty"`
+	FilesExported          int    `json:"filesExported"`
+	LauncherEventsExported bool   `json:"launcherEventsExported"`
+}
+
 type ModrinthProject struct {
 	ProjectID      string   `json:"projectId"`
 	Slug           string   `json:"slug"`

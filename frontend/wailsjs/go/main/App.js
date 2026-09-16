@@ -30,6 +30,10 @@ export function ExportModrinthModpack(arg1) {
   return window['go']['main']['App']['ExportModrinthModpack'](arg1);
 }
 
+export function ExportProfileLogs(arg1, arg2) {
+  return window['go']['main']['App']['ExportProfileLogs'](arg1, arg2);
+}
+
 export function GetAccount() {
   return window['go']['main']['App']['GetAccount']();
 }
