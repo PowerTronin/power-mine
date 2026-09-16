@@ -39,3 +39,7 @@ func AppDataDir() (string, error) {
 func ProfileGameDir(dataDir string, profileID string) string {
 	return filepath.Join(dataDir, "instances", profileID, "minecraft")
 }
+
+func LocalServerDir(dataDir string, serverID string) string {
+	return filepath.Join(dataDir, "servers", serverID)
+}

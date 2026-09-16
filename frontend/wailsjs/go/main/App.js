@@ -6,6 +6,10 @@ export function AppInfo() {
   return window['go']['main']['App']['AppInfo']();
 }
 
+export function CreateLocalServer(arg1) {
+  return window['go']['main']['App']['CreateLocalServer'](arg1);
+}
+
 export function CreateProfile(arg1) {
   return window['go']['main']['App']['CreateProfile'](arg1);
 }
@@ -66,6 +70,10 @@ export function InstallJava(arg1) {
   return window['go']['main']['App']['InstallJava'](arg1);
 }
 
+export function InstallLocalServer(arg1) {
+  return window['go']['main']['App']['InstallLocalServer'](arg1);
+}
+
 export function InstallModrinthMod(arg1, arg2) {
   return window['go']['main']['App']['InstallModrinthMod'](arg1, arg2);
 }
@@ -98,6 +106,10 @@ export function ListInstalledModrinthProjects(arg1) {
   return window['go']['main']['App']['ListInstalledModrinthProjects'](arg1);
 }
 
+export function ListLocalServers() {
+  return window['go']['main']['App']['ListLocalServers']();
+}
+
 export function ListMinecraftVersions() {
   return window['go']['main']['App']['ListMinecraftVersions']();
 }
@@ -128,6 +140,10 @@ export function ListProfiles() {
 
 export function ListQuiltLoaderVersions() {
   return window['go']['main']['App']['ListQuiltLoaderVersions']();
+}
+
+export function OpenLocalServerFolder(arg1) {
+  return window['go']['main']['App']['OpenLocalServerFolder'](arg1);
 }
 
 export function OpenProfileLogsFolder(arg1) {
@@ -192,6 +208,14 @@ export function SelectProfile(arg1) {
 
 export function SetProfileModEnabled(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetProfileModEnabled'](arg1, arg2, arg3);
+}
+
+export function StartLocalServer(arg1) {
+  return window['go']['main']['App']['StartLocalServer'](arg1);
+}
+
+export function StopLocalServer(arg1) {
+  return window['go']['main']['App']['StopLocalServer'](arg1);
 }
 
 export function UpdateModrinthModFile(arg1, arg2, arg3) {

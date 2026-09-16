@@ -371,6 +371,72 @@ func TestBuildNeoForgeLaunchCommandSkipsInheritedVanillaClientJar(t *testing.T) 
 	}
 }
 
+func TestBuildLocalServerLaunchCommand(t *testing.T) {
+	serverDir := t.TempDir()
+	jarPath := filepath.Join(serverDir, "server.jar")
+	if err := os.WriteFile(jarPath, []byte("server"), 0o644); err != nil {
+		t.Fatalf("write server jar: %v", err)
+	}
+
+	command, err := BuildLocalServerLaunchCommand(domain.LocalServer{
+		ID:        "server",
+		ServerDir: serverDir,
+		Memory:    domain.MemorySettings{MinMB: 1024, MaxMB: 2048},
+	}, ServerLaunchOptions{JavaPath: "/usr/bin/java"})
+	if err != nil {
+		t.Fatalf("BuildLocalServerLaunchCommand returned error: %v", err)
+	}
+
+	if command.JavaPath != "/usr/bin/java" {
+		t.Fatalf("JavaPath = %q", command.JavaPath)
+	}
+	if command.WorkDir != serverDir {
+		t.Fatalf("WorkDir = %q, want %q", command.WorkDir, serverDir)
+	}
+	joined := strings.Join(command.Args, " ")
+	for _, want := range []string{"-Xms1024M", "-Xmx2048M", "-jar server.jar nogui"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("launch args %q do not contain %q", joined, want)
+		}
+	}
+}
+
+func TestWriteLocalServerConfigWritesEULAAndPort(t *testing.T) {
+	serverDir := t.TempDir()
+	server := domain.LocalServer{
+		ID:           "server",
+		ServerDir:    serverDir,
+		Port:         25570,
+		EulaAccepted: true,
+	}
+
+	if err := writeLocalServerConfig(server); err != nil {
+		t.Fatalf("writeLocalServerConfig returned error: %v", err)
+	}
+
+	eula, err := os.ReadFile(filepath.Join(serverDir, "eula.txt"))
+	if err != nil {
+		t.Fatalf("read eula.txt: %v", err)
+	}
+	if string(eula) != "eula=true\n" {
+		t.Fatalf("eula.txt = %q", eula)
+	}
+
+	properties, err := os.ReadFile(filepath.Join(serverDir, "server.properties"))
+	if err != nil {
+		t.Fatalf("read server.properties: %v", err)
+	}
+	if !strings.Contains(string(properties), "server-port=25570") {
+		t.Fatalf("server.properties missing port: %q", properties)
+	}
+	if !strings.Contains(string(properties), "online-mode=false") {
+		t.Fatalf("server.properties missing offline mode: %q", properties)
+	}
+	if !strings.Contains(string(properties), "enable-command-block=false") {
+		t.Fatalf("server.properties should keep command blocks disabled: %q", properties)
+	}
+}
+
 func mustRawMessages(t *testing.T, values ...string) []json.RawMessage {
 	t.Helper()
 	raw := make([]json.RawMessage, 0, len(values))

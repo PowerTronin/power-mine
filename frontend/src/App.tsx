@@ -2,6 +2,7 @@ import {lazy, Suspense, useEffect, useMemo, useState, type FormEvent} from 'reac
 import './App.css';
 import {
     AppInfo,
+    CreateLocalServer,
     CreateProfile,
     DeleteProfile,
     DeleteModrinthModFiles,
@@ -16,6 +17,7 @@ import {
     ImportProfileMod,
     ImportModrinthModpack,
     InstallJava,
+    InstallLocalServer,
     InstallModrinthModFiles,
     InstallModrinthModVersionFiles,
     InstallProfile,
@@ -26,6 +28,8 @@ import {
     ListProfileGameLogs,
     ListProfileMods,
     ListProfiles,
+    ListLocalServers,
+    OpenLocalServerFolder,
     OpenProfileModsFolder,
     OpenProfileLogsFolder,
     PlanModrinthInstall,
@@ -42,6 +46,8 @@ import {
     SearchModrinthMods,
     SelectProfile,
     SetProfileModEnabled,
+    StartLocalServer,
+    StopLocalServer,
     UpdateModrinthModFile,
     UpdateModrinthModFiles,
     UpdateModrinthModVersionFiles,
@@ -80,8 +86,29 @@ type ProfileSettingsDraft = {
     maxMB: number;
 };
 
+type LocalServerForm = {
+    name: string;
+    minecraftVersion: string;
+    serverDir: string;
+    minMB: number;
+    maxMB: number;
+    port: number;
+    eulaAccepted: boolean;
+};
+
 type InstallProgress = {
     profileId: string;
+    stage: string;
+    message: string;
+    current: number;
+    total: number;
+    percent: number;
+    done: boolean;
+    error?: string;
+};
+
+type LocalServerProgress = {
+    serverId: string;
     stage: string;
     message: string;
     current: number;
@@ -110,6 +137,7 @@ type LauncherLog = {
     source: string;
     message: string;
     profileId?: string;
+    serverId?: string;
 };
 
 type LaunchEvent = {
@@ -123,6 +151,24 @@ type LaunchEvent = {
 
 type LaunchState = {
     profileId: string;
+    status: 'starting' | 'running' | 'stopped' | 'failed';
+    message: string;
+    exitCode?: number;
+    startedAt?: string;
+    endedAt?: string;
+};
+
+type LocalServerEvent = {
+    serverId: string;
+    status: 'starting' | 'running' | 'stopped' | 'failed';
+    stream?: string;
+    message: string;
+    exitCode?: number;
+    time: string;
+};
+
+type LocalServerRunState = {
+    serverId: string;
     status: 'starting' | 'running' | 'stopped' | 'failed';
     message: string;
     exitCode?: number;
@@ -152,6 +198,16 @@ const defaultCreateForm = {
     maxMB: 4096,
 };
 
+const defaultLocalServerForm: LocalServerForm = {
+    name: 'Local Vanilla Server',
+    minecraftVersion: '1.21.5',
+    serverDir: '',
+    minMB: 1024,
+    maxMB: 2048,
+    port: 25565,
+    eulaAccepted: false,
+};
+
 const defaultAccount: AccountDraft = {
     mode: 'offline',
     offlineName: 'Player',
@@ -164,6 +220,7 @@ function App() {
     const [settings, setSettings] = useState<SettingsDraft | null>(null);
     const [account, setAccount] = useState<AccountDraft>(defaultAccount);
     const [profiles, setProfiles] = useState<domain.Profile[]>([]);
+    const [localServers, setLocalServers] = useState<domain.LocalServer[]>([]);
     const [minecraftVersions, setMinecraftVersions] = useState<domain.VersionOption[]>([]);
     const [fabricLoaderVersions, setFabricLoaderVersions] = useState<domain.VersionOption[]>([]);
     const [quiltLoaderVersions, setQuiltLoaderVersions] = useState<domain.VersionOption[]>([]);
@@ -177,8 +234,11 @@ function App() {
     const [profileGameLogLists, setProfileGameLogLists] = useState<Record<string, domain.GameLogList>>({});
     const [profileGameLogContents, setProfileGameLogContents] = useState<Record<string, domain.GameLogContent>>({});
     const [launchStates, setLaunchStates] = useState<Record<string, LaunchState>>({});
+    const [localServerProgress, setLocalServerProgress] = useState<Record<string, LocalServerProgress>>({});
+    const [localServerRunStates, setLocalServerRunStates] = useState<Record<string, LocalServerRunState>>({});
     const [launcherLogs, setLauncherLogs] = useState<LauncherLog[]>([]);
     const [selectedProfileId, setSelectedProfileId] = useState('');
+    const [selectedLocalServerId, setSelectedLocalServerId] = useState('');
     const [profileSettingsId, setProfileSettingsId] = useState('');
     const [profileSettingsDraft, setProfileSettingsDraft] = useState<ProfileSettingsDraft | null>(null);
     const [modActionKey, setModActionKey] = useState('');
@@ -207,6 +267,8 @@ function App() {
     const [modpackImporting, setModpackImporting] = useState(false);
     const [appRefreshing, setAppRefreshing] = useState(false);
     const [createForm, setCreateForm] = useState(defaultCreateForm);
+    const [localServerForm, setLocalServerForm] = useState<LocalServerForm>(defaultLocalServerForm);
+    const [localServerActionKey, setLocalServerActionKey] = useState('');
 
     const selectedProfile = useMemo(
         () => profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0],
@@ -216,6 +278,10 @@ function App() {
         () => profiles.find((profile) => profile.id === browseProfileId) ?? selectedProfile,
         [profiles, browseProfileId, selectedProfile]
     );
+    const selectedLocalServer = useMemo(
+        () => localServers.find((server) => server.id === selectedLocalServerId) ?? localServers[0],
+        [localServers, selectedLocalServerId]
+    );
     const selectedProgress = selectedProfile ? installProgress[selectedProfile.id] : undefined;
     const selectedLaunch = selectedProfile ? launchStates[selectedProfile.id] : undefined;
     const selectedJavaRuntime = selectedProfile ? profileJavaRuntimes[selectedProfile.id] : undefined;
@@ -223,10 +289,16 @@ function App() {
     const selectedModrinthUpdatePlans = selectedProfile ? modrinthUpdatePlans[selectedProfile.id] ?? [] : [];
     const selectedSettingsOpen = !!selectedProfile && profileSettingsId === selectedProfile.id;
     const selectedLogs = useMemo(
-        () => selectedProfile
-            ? launcherLogs.filter((log) => !log.profileId || log.profileId === selectedProfile.id)
-            : launcherLogs,
-        [launcherLogs, selectedProfile]
+        () => launcherLogs.filter((log) => {
+            if (log.profileId) {
+                return !selectedProfile || log.profileId === selectedProfile.id;
+            }
+            if (log.serverId) {
+                return !selectedLocalServer || log.serverId === selectedLocalServer.id;
+            }
+            return true;
+        }),
+        [launcherLogs, selectedProfile, selectedLocalServer]
     );
     const createImportProgress = useMemo(
         () => activeCreateImportProgress(installProgress, modpackImporting),
@@ -251,6 +323,16 @@ function App() {
             setBrowseProfileId(selectedExists ? selectedProfileId : profiles[0].id);
         }
     }, [profiles, selectedProfileId, browseProfileId]);
+
+    useEffect(() => {
+        if (localServers.length === 0) {
+            setSelectedLocalServerId('');
+            return;
+        }
+        if (!localServers.some((server) => server.id === selectedLocalServerId)) {
+            setSelectedLocalServerId(localServers[0].id);
+        }
+    }, [localServers, selectedLocalServerId]);
 
     useEffect(() => {
         if (browseProfileForModrinth) {
@@ -330,6 +412,52 @@ function App() {
         });
     }, []);
 
+    useEffect(() => {
+        return EventsOn('server:progress', (event: LocalServerProgress) => {
+            if (!event?.serverId) {
+                return;
+            }
+            setLocalServerProgress((current) => ({
+                ...current,
+                [event.serverId]: event,
+            }));
+            if (event.error) {
+                setError(event.error);
+            }
+            appendLog({
+                level: event.error ? 'error' : event.done ? 'success' : 'info',
+                source: 'Server install',
+                message: localServerProgressMessage(event),
+                serverId: event.serverId,
+            });
+        });
+    }, []);
+
+    useEffect(() => {
+        return EventsOn('server:event', (event: LocalServerEvent) => {
+            if (!event?.serverId) {
+                return;
+            }
+            setLocalServerRunStates((current) => ({
+                ...current,
+                [event.serverId]: {
+                    serverId: event.serverId,
+                    status: event.status,
+                    message: event.message,
+                    exitCode: event.exitCode,
+                    endedAt: event.status === 'stopped' || event.status === 'failed' ? event.time : current[event.serverId]?.endedAt,
+                    startedAt: current[event.serverId]?.startedAt ?? event.time,
+                },
+            }));
+            appendLog({
+                level: event.status === 'failed' ? 'error' : event.status === 'stopped' ? 'success' : 'info',
+                source: event.stream ? `Server ${event.stream}` : 'Server',
+                message: event.exitCode !== undefined ? `${event.message} (exit ${event.exitCode})` : event.message,
+                serverId: event.serverId,
+            });
+        });
+    }, []);
+
     function appendLog(entry: Omit<LauncherLog, 'id' | 'time'>) {
         const next: LauncherLog = {
             ...entry,
@@ -342,19 +470,27 @@ function App() {
     async function refreshApp() {
         try {
             setError('');
-            const [nextInfo, nextSettings, nextAccount, profileList] = await Promise.all([
+            const [nextInfo, nextSettings, nextAccount, profileList, serverList] = await Promise.all([
                 AppInfo(),
                 GetSettings(),
                 GetAccount(),
-                ListProfiles()
+                ListProfiles(),
+                ListLocalServers()
             ]);
             setInfo(nextInfo);
             setSettings(settingsDraft(nextSettings));
             setAccount(accountDraft(nextAccount));
             setProfiles(profileList.profiles ?? []);
+            setLocalServers(serverList.servers ?? []);
             setSelectedProfileId(profileList.selectedProfileId);
             setBrowseProfileId((current) => current || profileList.selectedProfileId || profileList.profiles?.[0]?.id || '');
+            setSelectedLocalServerId((current) => current || serverList.servers?.[0]?.id || '');
             setCreateForm((current) => ({
+                ...current,
+                minMB: nextSettings.defaultMemory.minMB,
+                maxMB: nextSettings.defaultMemory.maxMB,
+            }));
+            setLocalServerForm((current) => ({
                 ...current,
                 minMB: nextSettings.defaultMemory.minMB,
                 maxMB: nextSettings.defaultMemory.maxMB,
@@ -494,6 +630,10 @@ function App() {
         setCreateForm((current) => ({
             ...current,
             ...nextCreateVersionSelection(current, nextMinecraftVersions, nextFabricLoaderVersions, nextQuiltLoaderVersions, nextForgeLoaderVersions, nextNeoForgeLoaderVersions),
+        }));
+        setLocalServerForm((current) => ({
+            ...current,
+            minecraftVersion: pickCurrentValue(current.minecraftVersion, nextMinecraftVersions),
         }));
     }
 
@@ -666,6 +806,223 @@ function App() {
                 source: 'Profile',
                 message: `Create profile failed: ${errorText(err)}`,
             });
+        }
+    }
+
+    async function refreshLocalServers() {
+        try {
+            const list = await ListLocalServers();
+            setLocalServers(list.servers ?? []);
+        } catch (err) {
+            appendLog({
+                level: 'error',
+                source: 'Server',
+                message: `Local server refresh failed: ${errorText(err)}`,
+            });
+        }
+    }
+
+    async function createLocalServer(event: FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+        if (!localServerForm.eulaAccepted) {
+            setError('Accept the Minecraft EULA before creating a local server.');
+            return;
+        }
+
+        try {
+            setError('');
+            setMessage('');
+            setLocalServerActionKey('server:create');
+            const server = await CreateLocalServer(new domain.LocalServerInput({
+                name: localServerForm.name,
+                minecraftVersion: localServerForm.minecraftVersion,
+                serverDir: localServerForm.serverDir,
+                memory: {
+                    minMB: Number(localServerForm.minMB),
+                    maxMB: Number(localServerForm.maxMB),
+                },
+                port: Number(localServerForm.port),
+                eulaAccepted: localServerForm.eulaAccepted,
+            }));
+            setLocalServers((current) => [...current, server]);
+            setSelectedLocalServerId(server.id);
+            setLocalServerForm((current) => ({
+                ...current,
+                name: defaultLocalServerForm.name,
+                serverDir: '',
+                eulaAccepted: false,
+            }));
+            appendLog({
+                level: 'success',
+                source: 'Server',
+                message: `Created ${server.name}.`,
+                serverId: server.id,
+            });
+            await installLocalServer(server.id);
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Server',
+                message: `Create local server failed: ${text}`,
+            });
+            await refreshLocalServers();
+        } finally {
+            setLocalServerActionKey('');
+        }
+    }
+
+    async function installLocalServer(id: string) {
+        const action = `${id}:install`;
+        try {
+            setError('');
+            setMessage('');
+            setLocalServerActionKey(action);
+            setLocalServers((current) => current.map((server) => server.id === id
+                ? domain.LocalServer.createFrom({
+                    ...server,
+                    install: {
+                        ...server.install,
+                        status: 'installing',
+                        message: 'Installing local server',
+                    },
+                })
+                : server
+            ));
+            appendLog({
+                level: 'info',
+                source: 'Server install',
+                message: 'Local server install requested.',
+                serverId: id,
+            });
+            const server = await InstallLocalServer(id);
+            setLocalServers((current) => replaceLocalServer(current, server));
+            setSelectedLocalServerId(server.id);
+            setMessage(server.install?.message || 'Local server ready.');
+            appendLog({
+                level: server.install?.status === 'failed' ? 'error' : 'success',
+                source: 'Server install',
+                message: server.install?.message || 'Local server ready.',
+                serverId: id,
+            });
+            return server;
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Server install',
+                message: `Local server install failed: ${text}`,
+                serverId: id,
+            });
+            await refreshLocalServers();
+            return undefined;
+        } finally {
+            setLocalServerActionKey((current) => current === action ? '' : current);
+        }
+    }
+
+    async function startLocalServer(id: string) {
+        try {
+            setError('');
+            setMessage('');
+            setLocalServerActionKey(`${id}:start`);
+            setLocalServerRunStates((current) => ({
+                ...current,
+                [id]: {
+                    serverId: id,
+                    status: 'starting',
+                    message: 'Starting local server',
+                    startedAt: new Date().toISOString(),
+                },
+            }));
+            const state = await StartLocalServer(id);
+            setLocalServerRunStates((current) => ({
+                ...current,
+                [id]: localServerRunStateFromDomain(state),
+            }));
+            appendLog({
+                level: 'info',
+                source: 'Server',
+                message: state.message,
+                serverId: id,
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            setLocalServerRunStates((current) => ({
+                ...current,
+                [id]: {
+                    serverId: id,
+                    status: 'failed',
+                    message: text,
+                    endedAt: new Date().toISOString(),
+                },
+            }));
+            appendLog({
+                level: 'error',
+                source: 'Server',
+                message: `Start local server failed: ${text}`,
+                serverId: id,
+            });
+        } finally {
+            setLocalServerActionKey('');
+        }
+    }
+
+    async function stopLocalServer(id: string) {
+        try {
+            setError('');
+            setMessage('');
+            setLocalServerActionKey(`${id}:stop`);
+            const state = await StopLocalServer(id);
+            setLocalServerRunStates((current) => ({
+                ...current,
+                [id]: localServerRunStateFromDomain(state),
+            }));
+            appendLog({
+                level: 'info',
+                source: 'Server',
+                message: state.message,
+                serverId: id,
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Server',
+                message: `Stop local server failed: ${text}`,
+                serverId: id,
+            });
+        } finally {
+            setLocalServerActionKey('');
+        }
+    }
+
+    async function openLocalServerFolder(id: string) {
+        try {
+            setError('');
+            setLocalServerActionKey(`${id}:open`);
+            await OpenLocalServerFolder(id);
+            appendLog({
+                level: 'info',
+                source: 'Server',
+                message: 'Local server folder opened.',
+                serverId: id,
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Server',
+                message: `Open local server folder failed: ${text}`,
+                serverId: id,
+            });
+        } finally {
+            setLocalServerActionKey('');
         }
     }
 
@@ -1103,7 +1460,7 @@ function App() {
             setError('');
             setMessage('');
             setGameLogActionKey(action);
-            const result = await ExportProfileLogs(profileId, launcherLogExportText(launcherLogs, profiles));
+            const result = await ExportProfileLogs(profileId, launcherLogExportText(launcherLogs, profiles, localServers));
             if (!result.path) {
                 appendLog({
                     level: 'info',
@@ -1958,15 +2315,30 @@ function App() {
                         profiles={profiles}
                         selectedProfile={selectedProfile}
                         selectedProfileId={selectedProfileId}
+                        localServers={localServers}
+                        selectedLocalServer={selectedLocalServer}
+                        selectedLocalServerId={selectedLocalServerId}
+                        localServerForm={localServerForm}
                         account={account}
                         javaStatus={javaStatus}
                         javaPath={settings?.javaPath ?? 'java'}
                         installProgress={installProgress}
+                        localServerProgress={localServerProgress}
                         javaInstallProgress={javaInstallProgress}
                         profileJavaRuntimes={profileJavaRuntimes}
                         launchStates={launchStates}
+                        localServerRunStates={localServerRunStates}
+                        localServerActionKey={localServerActionKey}
+                        minecraftVersions={minecraftVersions}
                         selectedLogs={selectedLogs}
                         onSelectProfile={selectProfile}
+                        onSelectLocalServer={setSelectedLocalServerId}
+                        onLocalServerFormChange={setLocalServerForm}
+                        onCreateLocalServer={createLocalServer}
+                        onInstallLocalServer={installLocalServer}
+                        onStartLocalServer={startLocalServer}
+                        onStopLocalServer={stopLocalServer}
+                        onOpenLocalServerFolder={openLocalServerFolder}
                         onInstallProfile={installProfile}
                         onRepairProfile={repairProfile}
                         onInstallJava={installJava}
@@ -2205,6 +2577,7 @@ function App() {
                     <ClassicLogsPanel
                         logs={launcherLogs}
                         profiles={profiles}
+                        localServers={localServers}
                         gameLogLists={profileGameLogLists}
                         gameLogContents={profileGameLogContents}
                         gameLogActionKey={gameLogActionKey}
@@ -2356,6 +2729,7 @@ function App() {
                     <LogsWindowDialog
                         logs={launcherLogs}
                         profiles={profiles}
+                        localServers={localServers}
                         gameLogLists={profileGameLogLists}
                         gameLogContents={profileGameLogContents}
                         gameLogActionKey={gameLogActionKey}
@@ -2377,15 +2751,30 @@ function HomePanel({
     profiles,
     selectedProfile,
     selectedProfileId,
+    localServers,
+    selectedLocalServer,
+    selectedLocalServerId,
+    localServerForm,
     account,
     javaStatus,
     javaPath,
     installProgress,
+    localServerProgress,
     javaInstallProgress,
     profileJavaRuntimes,
     launchStates,
+    localServerRunStates,
+    localServerActionKey,
+    minecraftVersions,
     selectedLogs,
     onSelectProfile,
+    onSelectLocalServer,
+    onLocalServerFormChange,
+    onCreateLocalServer,
+    onInstallLocalServer,
+    onStartLocalServer,
+    onStopLocalServer,
+    onOpenLocalServerFolder,
     onInstallProfile,
     onRepairProfile,
     onInstallJava,
@@ -2398,15 +2787,30 @@ function HomePanel({
     profiles: domain.Profile[];
     selectedProfile?: domain.Profile;
     selectedProfileId: string;
+    localServers: domain.LocalServer[];
+    selectedLocalServer?: domain.LocalServer;
+    selectedLocalServerId: string;
+    localServerForm: LocalServerForm;
     account: AccountDraft;
     javaStatus: domain.JavaStatus | null;
     javaPath: string;
     installProgress: Record<string, InstallProgress>;
+    localServerProgress: Record<string, LocalServerProgress>;
     javaInstallProgress: JavaInstallProgress | null;
     profileJavaRuntimes: Record<string, domain.ProfileJavaRuntime>;
     launchStates: Record<string, LaunchState>;
+    localServerRunStates: Record<string, LocalServerRunState>;
+    localServerActionKey: string;
+    minecraftVersions: domain.VersionOption[];
     selectedLogs: LauncherLog[];
     onSelectProfile: (id: string) => void;
+    onSelectLocalServer: (id: string) => void;
+    onLocalServerFormChange: (form: LocalServerForm) => void;
+    onCreateLocalServer: (event: FormEvent<HTMLFormElement>) => void;
+    onInstallLocalServer: (id: string) => void;
+    onStartLocalServer: (id: string) => void;
+    onStopLocalServer: (id: string) => void;
+    onOpenLocalServerFolder: (id: string) => void;
     onInstallProfile: (id: string) => void;
     onRepairProfile: (id: string) => void;
     onInstallJava: (version: number) => void;
@@ -2427,6 +2831,8 @@ function HomePanel({
     const javaBusy = isJavaInstalling(javaInstallProgress);
     const installedCount = profiles.filter((profile) => profile.install?.status === 'installed').length;
     const runningCount = Object.values(launchStates).filter((launch) => launch.status === 'running' || launch.status === 'starting').length;
+    const runningServerCount = Object.values(localServerRunStates).filter((run) => run.status === 'running' || run.status === 'starting').length;
+    const installedServerCount = localServers.filter((server) => server.install?.status === 'installed').length;
     const readyCount = profiles.filter((profile) => !playDisabledReason(
         profile,
         launchStates[profile.id],
@@ -2509,10 +2915,29 @@ function HomePanel({
                 <StatusTile label="Profiles" value={profiles.length.toString()}/>
                 <StatusTile label="Installed" value={`${installedCount}/${profiles.length}`}/>
                 <StatusTile label="Ready to play" value={readyCount.toString()}/>
-                <StatusTile label="Running" value={runningCount.toString()}/>
+                <StatusTile label="Running" value={(runningCount + runningServerCount).toString()}/>
+                <StatusTile label="Local servers" value={`${installedServerCount}/${localServers.length}`}/>
                 <StatusTile label="Account" value={accountLabel(account)}/>
                 <StatusTile label="Java" value={javaStatusText(javaStatus, javaPath)}/>
             </div>
+
+            <LocalServerQuickPanel
+                servers={localServers}
+                selectedServer={selectedLocalServer}
+                selectedServerId={selectedLocalServer?.id ?? selectedLocalServerId}
+                form={localServerForm}
+                minecraftVersions={minecraftVersions}
+                progressByServer={localServerProgress}
+                runStates={localServerRunStates}
+                actionKey={localServerActionKey}
+                onSelectServer={onSelectLocalServer}
+                onFormChange={onLocalServerFormChange}
+                onCreate={onCreateLocalServer}
+                onInstall={onInstallLocalServer}
+                onStart={onStartLocalServer}
+                onStop={onStopLocalServer}
+                onOpenFolder={onOpenLocalServerFolder}
+            />
 
             {selectedProfile ? (
                 <div className="home-secondary">
@@ -2541,6 +2966,196 @@ function HomePanel({
                     onLaunchProfile={onLaunchProfile}
                     onOpenLibrary={onOpenLibrary}
                 />
+            )}
+        </section>
+    );
+}
+
+function LocalServerQuickPanel({
+    servers,
+    selectedServer,
+    selectedServerId,
+    form,
+    minecraftVersions,
+    progressByServer,
+    runStates,
+    actionKey,
+    onSelectServer,
+    onFormChange,
+    onCreate,
+    onInstall,
+    onStart,
+    onStop,
+    onOpenFolder
+}: {
+    servers: domain.LocalServer[];
+    selectedServer?: domain.LocalServer;
+    selectedServerId: string;
+    form: LocalServerForm;
+    minecraftVersions: domain.VersionOption[];
+    progressByServer: Record<string, LocalServerProgress>;
+    runStates: Record<string, LocalServerRunState>;
+    actionKey: string;
+    onSelectServer: (id: string) => void;
+    onFormChange: (form: LocalServerForm) => void;
+    onCreate: (event: FormEvent<HTMLFormElement>) => void;
+    onInstall: (id: string) => void;
+    onStart: (id: string) => void;
+    onStop: (id: string) => void;
+    onOpenFolder: (id: string) => void;
+}) {
+    const creating = actionKey === 'server:create';
+    const selectedProgress = selectedServer ? progressByServer[selectedServer.id] : undefined;
+    const selectedRun = selectedServer ? runStates[selectedServer.id] : undefined;
+
+    return (
+        <section className="dashboard-panel local-server-panel">
+            <div className="panel-heading">
+                <div>
+                    <p className="eyebrow">Local server</p>
+                    <h2>Quick vanilla server</h2>
+                </div>
+                <span className="server-count">{servers.length} saved</span>
+            </div>
+            <div className="local-server-layout">
+                <form className="local-server-form" onSubmit={onCreate}>
+                    <label>
+                        Server name
+                        <input
+                            value={form.name}
+                            onChange={(event) => onFormChange({...form, name: event.target.value})}
+                        />
+                    </label>
+                    <label>
+                        Minecraft version
+                        <select
+                            value={form.minecraftVersion}
+                            onChange={(event) => onFormChange({...form, minecraftVersion: event.target.value})}
+                            disabled={minecraftVersions.length === 0}
+                        >
+                            {minecraftVersions.map((version) => (
+                                <option key={version.id} value={version.id}>
+                                    {version.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label>
+                        Port
+                        <input
+                            type="number"
+                            min="1"
+                            max="65535"
+                            value={form.port}
+                            onChange={(event) => onFormChange({...form, port: Number(event.target.value)})}
+                        />
+                    </label>
+                    <label>
+                        Min memory MB
+                        <input
+                            type="number"
+                            min="512"
+                            step="256"
+                            value={form.minMB}
+                            onChange={(event) => onFormChange({...form, minMB: Number(event.target.value)})}
+                        />
+                    </label>
+                    <label>
+                        Max memory MB
+                        <input
+                            type="number"
+                            min="512"
+                            step="256"
+                            value={form.maxMB}
+                            onChange={(event) => onFormChange({...form, maxMB: Number(event.target.value)})}
+                        />
+                    </label>
+                    <label className="wide">
+                        Server directory
+                        <input
+                            value={form.serverDir}
+                            placeholder="Default local server directory"
+                            onChange={(event) => onFormChange({...form, serverDir: event.target.value})}
+                        />
+                    </label>
+                    <label className="eula-check wide">
+                        <input
+                            type="checkbox"
+                            checked={form.eulaAccepted}
+                            onChange={(event) => onFormChange({...form, eulaAccepted: event.target.checked})}
+                        />
+                        <span>I accept the Minecraft EULA for this local server.</span>
+                    </label>
+                    <div className="local-server-create wide">
+                        <button className="primary" type="submit" disabled={creating || !form.eulaAccepted}>
+                            {creating ? 'Creating server' : 'Create and install'}
+                        </button>
+                        {!form.eulaAccepted && <p>Required before writing eula.txt.</p>}
+                    </div>
+                </form>
+
+                <div className="local-server-list">
+                    {servers.length === 0 ? (
+                        <div className="local-server-empty">
+                            <strong>No local servers yet</strong>
+                            <p>Create one to download a vanilla server jar and start it with Java nogui.</p>
+                        </div>
+                    ) : (
+                        servers.map((server) => {
+                            const progress = progressByServer[server.id];
+                            const run = runStates[server.id];
+                            const active = server.id === selectedServerId;
+                            const installing = isLocalServerInstalling(server, progress);
+                            const running = run?.status === 'running' || run?.status === 'starting';
+                            const startReason = localServerStartDisabledReason(server, progress, run);
+                            const installVisible = server.install?.status !== 'installed' || installing;
+                            const busy = actionKey.startsWith(`${server.id}:`);
+
+                            return (
+                                <article key={server.id} className={active ? 'local-server-row active' : 'local-server-row'}>
+                                    <button className="local-server-select" type="button" onClick={() => onSelectServer(server.id)}>
+                                        <strong>{server.name}</strong>
+                                        <span>{localServerSubtitle(server)}</span>
+                                        <small>{localServerStatusText(server, progress, run)}</small>
+                                    </button>
+                                    <div className="local-server-actions">
+                                        {installVisible && (
+                                            <button className="small" type="button" disabled={installing || busy} onClick={() => onInstall(server.id)}>
+                                                {installing ? 'Installing' : 'Install'}
+                                            </button>
+                                        )}
+                                        {running ? (
+                                            <button className="small danger" type="button" disabled={busy} onClick={() => onStop(server.id)}>
+                                                Stop
+                                            </button>
+                                        ) : (
+                                            <button className="small primary" type="button" disabled={!!startReason || busy} onClick={() => onStart(server.id)}>
+                                                Start
+                                            </button>
+                                        )}
+                                        <button className="small" type="button" disabled={busy} onClick={() => onOpenFolder(server.id)}>
+                                            Folder
+                                        </button>
+                                    </div>
+                                    {active && (progress || run) && (
+                                        <div className="local-server-detail">
+                                            {progress && <ProgressBar progress={progress}/>}
+                                            {run && <p>{localServerRunStatusText(run)}</p>}
+                                            {startReason && <p>{startReason}</p>}
+                                        </div>
+                                    )}
+                                </article>
+                            );
+                        })
+                    )}
+                </div>
+            </div>
+            {selectedServer && (
+                <p className="local-server-footnote">
+                    Selected: {selectedServer.serverDir}
+                    {selectedProgress && ` / ${localServerProgressMessage(selectedProgress)}`}
+                    {selectedRun && ` / ${localServerRunStatusText(selectedRun)}`}
+                </p>
             )}
         </section>
     );
@@ -3998,6 +4613,7 @@ function LauncherLogPanel({
 function ClassicLogsPanel({
     logs,
     profiles,
+    localServers,
     gameLogLists,
     gameLogContents,
     gameLogActionKey,
@@ -4011,6 +4627,7 @@ function ClassicLogsPanel({
 }: {
     logs: LauncherLog[];
     profiles: domain.Profile[];
+    localServers: domain.LocalServer[];
     gameLogLists: Record<string, domain.GameLogList>;
     gameLogContents: Record<string, domain.GameLogContent>;
     gameLogActionKey: string;
@@ -4032,6 +4649,7 @@ function ClassicLogsPanel({
     const [gameFileName, setGameFileName] = useState('live');
 
     const profilesById = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile])), [profiles]);
+    const localServersById = useMemo(() => new Map(localServers.map((server) => [server.id, server])), [localServers]);
     const gameProfile = useMemo(
         () => profiles.find((profile) => profile.id === gameProfileId) ?? profiles[0],
         [profiles, gameProfileId]
@@ -4074,14 +4692,23 @@ function ClassicLogsPanel({
     }, [gameFileName, gameFiles]);
 
     useEffect(() => {
+        if (profileFilter.startsWith('server:')) {
+            if (!localServersById.has(profileFilter.slice('server:'.length))) {
+                setProfileFilter('all');
+            }
+            return;
+        }
         if (profileFilter !== 'all' && profileFilter !== 'global' && !profilesById.has(profileFilter)) {
             setProfileFilter('all');
         }
-    }, [profileFilter, profilesById]);
+    }, [profileFilter, profilesById, localServersById]);
 
     const baseLogs = useMemo(() => logs.filter((log) => {
-        if (profileFilter === 'global' && log.profileId) {
+        if (profileFilter === 'global' && (log.profileId || log.serverId)) {
             return false;
+        }
+        if (profileFilter.startsWith('server:')) {
+            return log.serverId === profileFilter.slice('server:'.length);
         }
         if (profileFilter !== 'all' && profileFilter !== 'global' && log.profileId !== profileFilter) {
             return false;
@@ -4093,7 +4720,7 @@ function ClassicLogsPanel({
         if (!text) {
             return true;
         }
-        const profileName = log.profileId ? profilesById.get(log.profileId)?.name ?? log.profileId : 'launcher';
+        const profileName = logTargetName(log, profilesById, localServersById);
         return [
             log.time,
             log.level,
@@ -4101,7 +4728,7 @@ function ClassicLogsPanel({
             log.message,
             profileName,
         ].some((part) => part.toLowerCase().includes(text));
-    }), [logs, profileFilter, levelFilter, query, profilesById]);
+    }), [logs, profileFilter, levelFilter, query, profilesById, localServersById]);
 
     const sourceEntries = useMemo(() => {
         const counts = new Map<string, number>();
@@ -4132,7 +4759,7 @@ function ClassicLogsPanel({
             setCopyStatus('Nothing to copy');
             return;
         }
-        const text = consoleLogs.map((log) => formatLauncherLogLine(log, profilesById)).join('\n');
+        const text = consoleLogs.map((log) => formatLauncherLogLine(log, profilesById, localServersById)).join('\n');
         try {
             if (!navigator.clipboard?.writeText) {
                 throw new Error('Clipboard is unavailable');
@@ -4152,7 +4779,7 @@ function ClassicLogsPanel({
 
     async function copyGameLog() {
         const text = gameFileName === 'live'
-            ? liveGameLogs.map((log) => formatLauncherLogLine(log, profilesById)).join('\n')
+            ? liveGameLogs.map((log) => formatLauncherLogLine(log, profilesById, localServersById)).join('\n')
             : selectedGameContent?.content ?? '';
         if (!text) {
             setCopyStatus('Nothing to copy');
@@ -4277,13 +4904,18 @@ function ClassicLogsPanel({
 
                 <div className="logs-toolbar">
                     <label>
-                        Installation
+                        Target
                         <select value={profileFilter} onChange={(event) => setProfileFilter(event.target.value)}>
-                            <option value="all">All installations</option>
+                            <option value="all">All targets</option>
                             <option value="global">Launcher only</option>
                             {profiles.map((profile) => (
                                 <option key={profile.id} value={profile.id}>
                                     {profile.name}
+                                </option>
+                            ))}
+                            {localServers.map((server) => (
+                                <option key={server.id} value={`server:${server.id}`}>
+                                    Server: {server.name}
                                 </option>
                             ))}
                         </select>
@@ -4318,7 +4950,7 @@ function ClassicLogsPanel({
                                 <span className="log-line-time">{log.time}</span>
                                 <span className="log-line-level">{log.level}</span>
                                 <span className="log-line-source">{log.source}</span>
-                                <span className="log-line-profile">{logProfileLabel(log, profilesById)}</span>
+                                <span className="log-line-profile">{logProfileLabel(log, profilesById, localServersById)}</span>
                                 <span className="log-line-message">{log.message}</span>
                             </div>
                         ))
@@ -4425,6 +5057,7 @@ function ClassicLogsPanel({
 function LogsWindowDialog({
     logs,
     profiles,
+    localServers,
     gameLogLists,
     gameLogContents,
     gameLogActionKey,
@@ -4438,6 +5071,7 @@ function LogsWindowDialog({
 }: {
     logs: LauncherLog[];
     profiles: domain.Profile[];
+    localServers: domain.LocalServer[];
     gameLogLists: Record<string, domain.GameLogList>;
     gameLogContents: Record<string, domain.GameLogContent>;
     gameLogActionKey: string;
@@ -4462,6 +5096,7 @@ function LogsWindowDialog({
                 <ClassicLogsPanel
                     logs={logs}
                     profiles={profiles}
+                    localServers={localServers}
                     gameLogLists={gameLogLists}
                     gameLogContents={gameLogContents}
                     gameLogActionKey={gameLogActionKey}
@@ -4521,6 +5156,10 @@ function profileSubtitle(profile: domain.Profile) {
     return `${profile.minecraftVersion} / ${loader}`;
 }
 
+function localServerSubtitle(server: domain.LocalServer) {
+    return `${server.minecraftVersion} / port ${server.port}`;
+}
+
 function loaderDisplayName(loader: string) {
     switch (loader) {
         case 'fabric':
@@ -4543,20 +5182,40 @@ function accountLabel(account?: AccountDraft | domain.AccountConfig | null) {
     return 'Microsoft account';
 }
 
-function logProfileLabel(log: LauncherLog, profilesById: Map<string, domain.Profile>) {
+function logProfileLabel(
+    log: LauncherLog,
+    profilesById: Map<string, domain.Profile>,
+    localServersById: Map<string, domain.LocalServer> = new Map()
+) {
+    if (log.serverId) {
+        return `Server: ${localServersById.get(log.serverId)?.name ?? log.serverId}`;
+    }
     if (!log.profileId) {
         return 'Launcher';
     }
     return profilesById.get(log.profileId)?.name ?? log.profileId;
 }
 
-function formatLauncherLogLine(log: LauncherLog, profilesById: Map<string, domain.Profile>) {
-    return `[${log.time}] [${log.level.toUpperCase()}] [${log.source}] [${logProfileLabel(log, profilesById)}] ${log.message}`;
+function logTargetName(
+    log: LauncherLog,
+    profilesById: Map<string, domain.Profile>,
+    localServersById: Map<string, domain.LocalServer> = new Map()
+) {
+    return logProfileLabel(log, profilesById, localServersById).toLowerCase();
 }
 
-function launcherLogExportText(logs: LauncherLog[], profiles: domain.Profile[]) {
+function formatLauncherLogLine(
+    log: LauncherLog,
+    profilesById: Map<string, domain.Profile>,
+    localServersById: Map<string, domain.LocalServer> = new Map()
+) {
+    return `[${log.time}] [${log.level.toUpperCase()}] [${log.source}] [${logProfileLabel(log, profilesById, localServersById)}] ${log.message}`;
+}
+
+function launcherLogExportText(logs: LauncherLog[], profiles: domain.Profile[], localServers: domain.LocalServer[] = []) {
     const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
-    return [...logs].reverse().map((log) => formatLauncherLogLine(log, profilesById)).join('\n');
+    const localServersById = new Map(localServers.map((server) => [server.id, server]));
+    return [...logs].reverse().map((log) => formatLauncherLogLine(log, profilesById, localServersById)).join('\n');
 }
 
 function logExportMessage(result: domain.LogExportResult) {
@@ -4651,6 +5310,43 @@ function launchStatusText(launch: LaunchState) {
     }
 }
 
+function localServerRunStatusText(run: LocalServerRunState) {
+    switch (run.status) {
+        case 'running':
+            return 'Running: ' + run.message;
+        case 'starting':
+            return 'Starting: ' + run.message;
+        case 'stopped':
+            return `Stopped${run.exitCode !== undefined ? ` with exit ${run.exitCode}` : ''}.`;
+        case 'failed':
+            return 'Failed: ' + run.message;
+    }
+}
+
+function localServerStatusText(server: domain.LocalServer, progress?: LocalServerProgress, run?: LocalServerRunState) {
+    const parts = [localServerInstallStatusText(server)];
+    if (run) {
+        parts.push(localServerRunStatusText(run));
+    }
+    if (progress && !progress.done) {
+        parts.push(localServerProgressMessage(progress));
+    }
+    return parts.join(' / ');
+}
+
+function localServerInstallStatusText(server: domain.LocalServer) {
+    switch (server.install?.status) {
+        case 'installed':
+            return 'Installed';
+        case 'installing':
+            return 'Installing';
+        case 'failed':
+            return 'Failed';
+        default:
+            return 'Not installed';
+    }
+}
+
 function javaStatusText(status: domain.JavaStatus | null, fallbackPath: string) {
     if (!status) {
         return fallbackPath;
@@ -4687,6 +5383,11 @@ function progressMessage(progress: InstallProgress) {
     return `${progress.message}${counter}`;
 }
 
+function localServerProgressMessage(progress: LocalServerProgress) {
+    const counter = progress.total > 0 ? ` (${progress.current}/${progress.total})` : '';
+    return `${progress.message}${counter}`;
+}
+
 function javaProgressMessage(progress: JavaInstallProgress) {
     const counter = progress.total > 0 ? ` (${formatBytes(progress.current)} / ${formatBytes(progress.total)})` : '';
     return `${progress.message}${counter}`;
@@ -4695,6 +5396,48 @@ function javaProgressMessage(progress: JavaInstallProgress) {
 function isInstalling(profile: domain.Profile, progressByProfile: Record<string, InstallProgress | undefined>) {
     const progress = progressByProfile[profile.id];
     return profile.install?.status === 'installing' || profile.install?.status === 'repairing' || (!!progress && !progress.done && progress.stage !== 'failed');
+}
+
+function isLocalServerInstalling(server: domain.LocalServer, progress?: LocalServerProgress) {
+    return server.install?.status === 'installing' || (!!progress && !progress.done && progress.stage !== 'failed');
+}
+
+function localServerStartDisabledReason(
+    server: domain.LocalServer,
+    progress?: LocalServerProgress,
+    run?: LocalServerRunState
+) {
+    if (run?.status === 'running' || run?.status === 'starting') {
+        return 'Already running';
+    }
+    if (isLocalServerInstalling(server, progress)) {
+        return 'Install in progress';
+    }
+    if (server.install?.status !== 'installed') {
+        return 'Install required';
+    }
+    if (!server.eulaAccepted) {
+        return 'Accept Minecraft EULA';
+    }
+    return null;
+}
+
+function replaceLocalServer(servers: domain.LocalServer[], next: domain.LocalServer) {
+    if (!servers.some((server) => server.id === next.id)) {
+        return [...servers, next];
+    }
+    return servers.map((server) => server.id === next.id ? next : server);
+}
+
+function localServerRunStateFromDomain(state: domain.LocalServerRunState): LocalServerRunState {
+    return {
+        serverId: state.serverId,
+        status: state.status as LocalServerRunState['status'],
+        message: state.message,
+        exitCode: state.exitCode,
+        startedAt: state.startedAt,
+        endedAt: state.endedAt,
+    };
 }
 
 function shouldShowInstallButton(profile: domain.Profile, progress?: InstallProgress) {

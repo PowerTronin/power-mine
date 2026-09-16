@@ -4,6 +4,8 @@ import {domain} from '../models';
 
 export function AppInfo():Promise<domain.AppInfo>;
 
+export function CreateLocalServer(arg1:domain.LocalServerInput):Promise<domain.LocalServer>;
+
 export function CreateProfile(arg1:domain.ProfileInput):Promise<domain.Profile>;
 
 export function DeleteModrinthMod(arg1:string,arg2:string):Promise<domain.ModrinthDeleteResult>;
@@ -34,6 +36,8 @@ export function ImportProfileMod(arg1:string):Promise<domain.ModList>;
 
 export function InstallJava(arg1:number):Promise<domain.JavaStatus>;
 
+export function InstallLocalServer(arg1:string):Promise<domain.LocalServer>;
+
 export function InstallModrinthMod(arg1:string,arg2:string):Promise<domain.ModrinthInstallResult>;
 
 export function InstallModrinthModFiles(arg1:string,arg2:string,arg3:Array<string>):Promise<domain.ModrinthInstallResult>;
@@ -50,6 +54,8 @@ export function ListForgeLoaderVersions():Promise<Array<domain.VersionOption>>;
 
 export function ListInstalledModrinthProjects(arg1:string):Promise<Array<string>>;
 
+export function ListLocalServers():Promise<domain.LocalServerList>;
+
 export function ListMinecraftVersions():Promise<Array<domain.VersionOption>>;
 
 export function ListModrinthProjectVersions(arg1:string,arg2:string):Promise<Array<domain.ModrinthVersion>>;
@@ -65,6 +71,8 @@ export function ListProfileMods(arg1:string):Promise<domain.ModList>;
 export function ListProfiles():Promise<domain.ProfileList>;
 
 export function ListQuiltLoaderVersions():Promise<Array<domain.VersionOption>>;
+
+export function OpenLocalServerFolder(arg1:string):Promise<void>;
 
 export function OpenProfileLogsFolder(arg1:string):Promise<void>;
 
@@ -97,6 +105,10 @@ export function SearchModrinthMods(arg1:string,arg2:string):Promise<domain.Modri
 export function SelectProfile(arg1:string):Promise<domain.ProfileList>;
 
 export function SetProfileModEnabled(arg1:string,arg2:string,arg3:boolean):Promise<domain.ModList>;
+
+export function StartLocalServer(arg1:string):Promise<domain.LocalServerRunState>;
+
+export function StopLocalServer(arg1:string):Promise<domain.LocalServerRunState>;
 
 export function UpdateModrinthModFile(arg1:string,arg2:string,arg3:Array<string>):Promise<domain.ModrinthUpdateResult>;
 

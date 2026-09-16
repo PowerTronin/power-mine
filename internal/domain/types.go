@@ -394,6 +394,61 @@ type LaunchEvent struct {
 	Time      string       `json:"time"`
 }
 
+type LocalServer struct {
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	MinecraftVersion string         `json:"minecraftVersion"`
+	ServerDir        string         `json:"serverDir"`
+	Memory           MemorySettings `json:"memory"`
+	Port             int            `json:"port"`
+	EulaAccepted     bool           `json:"eulaAccepted"`
+	Install          InstallState   `json:"install"`
+	CreatedAt        string         `json:"createdAt"`
+	UpdatedAt        string         `json:"updatedAt"`
+}
+
+type LocalServerInput struct {
+	Name             string         `json:"name"`
+	MinecraftVersion string         `json:"minecraftVersion"`
+	ServerDir        string         `json:"serverDir,omitempty"`
+	Memory           MemorySettings `json:"memory"`
+	Port             int            `json:"port"`
+	EulaAccepted     bool           `json:"eulaAccepted"`
+}
+
+type LocalServerList struct {
+	Servers []LocalServer `json:"servers"`
+}
+
+type LocalServerProgress struct {
+	ServerID string `json:"serverId"`
+	Stage    string `json:"stage"`
+	Message  string `json:"message"`
+	Current  int    `json:"current"`
+	Total    int    `json:"total"`
+	Percent  int    `json:"percent"`
+	Done     bool   `json:"done"`
+	Error    string `json:"error,omitempty"`
+}
+
+type LocalServerRunState struct {
+	ServerID  string       `json:"serverId"`
+	Status    LaunchStatus `json:"status"`
+	Message   string       `json:"message"`
+	ExitCode  int          `json:"exitCode,omitempty"`
+	StartedAt string       `json:"startedAt,omitempty"`
+	EndedAt   string       `json:"endedAt,omitempty"`
+}
+
+type LocalServerEvent struct {
+	ServerID string       `json:"serverId"`
+	Status   LaunchStatus `json:"status"`
+	Stream   string       `json:"stream,omitempty"`
+	Message  string       `json:"message"`
+	ExitCode int          `json:"exitCode,omitempty"`
+	Time     string       `json:"time"`
+}
+
 type Profile struct {
 	ID               string         `json:"id"`
 	Name             string         `json:"name"`

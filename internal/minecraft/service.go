@@ -1162,6 +1162,7 @@ type versionMetadata struct {
 	} `json:"assetIndex"`
 	Downloads struct {
 		Client artifact `json:"client"`
+		Server artifact `json:"server"`
 	} `json:"downloads"`
 	JavaVersion struct {
 		Component    string `json:"component"`

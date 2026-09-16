@@ -23,6 +23,7 @@ import (
 	"power-mine/internal/mods"
 	"power-mine/internal/platform"
 	"power-mine/internal/profiles"
+	"power-mine/internal/servers"
 	"power-mine/internal/settings"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -39,7 +40,10 @@ type App struct {
 	javaService      *javasvc.Service
 	modpackService   *modpacks.Service
 	modsService      *mods.Service
+	serverService    *servers.Service
 	running          map[string]*exec.Cmd
+	serverInputs     map[string]io.WriteCloser
+	stopping         map[string]bool
 	startupErr       error
 	headless         bool
 }
@@ -64,7 +68,9 @@ type modrinthInstallPlanState struct {
 
 func NewApp() *App {
 	return &App{
-		running: make(map[string]*exec.Cmd),
+		running:      make(map[string]*exec.Cmd),
+		serverInputs: make(map[string]io.WriteCloser),
+		stopping:     make(map[string]bool),
 	}
 }
 
@@ -88,6 +94,7 @@ func (a *App) initServices(ctx context.Context, dataDir string) {
 	a.javaService = javasvc.NewService(dataDir)
 	a.modpackService = modpacks.NewService()
 	a.modsService = mods.NewService()
+	a.serverService = servers.NewService(dataDir)
 	a.startupErr = nil
 }
 
@@ -184,6 +191,81 @@ func (a *App) SelectProfile(id string) (domain.ProfileList, error) {
 		return domain.ProfileList{}, err
 	}
 	return a.profileService.Select(id)
+}
+
+func (a *App) ListLocalServers() (domain.LocalServerList, error) {
+	if err := a.ensureReady(); err != nil {
+		return domain.LocalServerList{}, err
+	}
+	return a.serverService.List()
+}
+
+func (a *App) CreateLocalServer(input domain.LocalServerInput) (domain.LocalServer, error) {
+	if err := a.ensureReady(); err != nil {
+		return domain.LocalServer{}, err
+	}
+	currentSettings, err := a.settingsService.Get()
+	if err != nil {
+		return domain.LocalServer{}, err
+	}
+	return a.serverService.Create(input, currentSettings.DefaultMemory)
+}
+
+func (a *App) InstallLocalServer(id string) (domain.LocalServer, error) {
+	if err := a.ensureReady(); err != nil {
+		return domain.LocalServer{}, err
+	}
+
+	server, err := a.serverService.Get(id)
+	if err != nil {
+		return domain.LocalServer{}, err
+	}
+
+	server, err = a.serverService.SetInstallState(id, domain.InstallState{
+		Status:      "installing",
+		Installed:   false,
+		Message:     "Installing local server",
+		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
+		BaseVersion: server.MinecraftVersion,
+	})
+	if err != nil {
+		return domain.LocalServer{}, err
+	}
+
+	a.emitLocalServerProgress(domain.LocalServerProgress{
+		ServerID: id,
+		Stage:    "start",
+		Message:  "Installing local server",
+	})
+	if err := a.minecraftService.InstallVanillaServer(a.ctx, server, a.emitLocalServerProgress); err != nil {
+		failed, stateErr := a.serverService.SetInstallState(id, domain.InstallState{
+			Status:      "failed",
+			Installed:   false,
+			Message:     "Local server install failed",
+			UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
+			LastError:   err.Error(),
+			BaseVersion: server.MinecraftVersion,
+		})
+		a.emitLocalServerProgress(domain.LocalServerProgress{
+			ServerID: id,
+			Stage:    "failed",
+			Message:  "Local server install failed",
+			Done:     true,
+			Error:    err.Error(),
+		})
+		if stateErr != nil {
+			return domain.LocalServer{}, stateErr
+		}
+		return failed, err
+	}
+
+	return a.serverService.SetInstallState(id, domain.InstallState{
+		Status:      "installed",
+		Installed:   true,
+		Message:     "Local server ready",
+		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
+		BaseVersion: server.MinecraftVersion,
+	})
 }
 
 func (a *App) ListMinecraftVersions() ([]domain.VersionOption, error) {
@@ -618,6 +700,29 @@ func (a *App) OpenProfileLogsFolder(id string) error {
 		return exec.Command("xdg-open", logsDir).Start()
 	default:
 		wailsruntime.BrowserOpenURL(a.ctx, "file://"+logsDir)
+		return nil
+	}
+}
+
+func (a *App) OpenLocalServerFolder(id string) error {
+	if err := a.ensureReady(); err != nil {
+		return err
+	}
+	server, err := a.serverService.Get(id)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(server.ServerDir, 0o755); err != nil {
+		return err
+	}
+
+	switch stdruntime.GOOS {
+	case "darwin":
+		return exec.Command("open", server.ServerDir).Start()
+	case "linux":
+		return exec.Command("xdg-open", server.ServerDir).Start()
+	default:
+		wailsruntime.BrowserOpenURL(a.ctx, "file://"+server.ServerDir)
 		return nil
 	}
 }
@@ -1973,6 +2078,174 @@ func (a *App) LaunchProfile(id string) (domain.LaunchState, error) {
 	}, nil
 }
 
+func (a *App) StartLocalServer(id string) (domain.LocalServerRunState, error) {
+	if err := a.ensureReady(); err != nil {
+		return domain.LocalServerRunState{}, err
+	}
+
+	runningKey := localServerRunningKey(id)
+	if err := a.reserveLaunch(runningKey); err != nil {
+		return domain.LocalServerRunState{}, err
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			a.releaseLaunch(runningKey)
+		}
+	}()
+
+	a.emitLocalServerEvent(domain.LocalServerEvent{
+		ServerID: id,
+		Status:   domain.LaunchStarting,
+		Message:  "Preparing local server",
+		Time:     time.Now().UTC().Format(time.RFC3339),
+	})
+
+	server, err := a.serverService.Get(id)
+	if err != nil {
+		return domain.LocalServerRunState{}, err
+	}
+	if server.Install.Status != "installed" {
+		return domain.LocalServerRunState{}, fmt.Errorf("local server is not installed")
+	}
+	if !server.EulaAccepted {
+		return domain.LocalServerRunState{}, fmt.Errorf("minecraft EULA must be accepted before starting the server")
+	}
+
+	currentSettings, err := a.settingsService.Get()
+	if err != nil {
+		return domain.LocalServerRunState{}, err
+	}
+	javaPath, requiredJava, err := a.ensureMinecraftJavaRuntime(server.MinecraftVersion, currentSettings.JavaPath, func(required int) {
+		a.emitLocalServerProgress(domain.LocalServerProgress{
+			ServerID: id,
+			Stage:    "java-runtime",
+			Message:  fmt.Sprintf("Installing Java %d runtime", required),
+			Percent:  10,
+		})
+	})
+	if err != nil {
+		return domain.LocalServerRunState{}, err
+	}
+	if requiredJava > 0 {
+		a.emitLocalServerProgress(domain.LocalServerProgress{
+			ServerID: id,
+			Stage:    "java-runtime",
+			Message:  fmt.Sprintf("Using Java %d runtime", requiredJava),
+			Percent:  20,
+		})
+	}
+
+	commandSpec, err := minecraft.BuildLocalServerLaunchCommand(server, minecraft.ServerLaunchOptions{
+		JavaPath: javaPath,
+		Memory:   server.Memory,
+	})
+	if err != nil {
+		return domain.LocalServerRunState{}, err
+	}
+
+	command := exec.CommandContext(a.ctx, commandSpec.JavaPath, commandSpec.Args...)
+	command.Dir = commandSpec.WorkDir
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		return domain.LocalServerRunState{}, err
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return domain.LocalServerRunState{}, err
+	}
+	stderr, err := command.StderrPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return domain.LocalServerRunState{}, err
+	}
+
+	startedAt := time.Now().UTC().Format(time.RFC3339)
+	if err := command.Start(); err != nil {
+		_ = stdin.Close()
+		a.emitLocalServerEvent(domain.LocalServerEvent{
+			ServerID: id,
+			Status:   domain.LaunchFailed,
+			Message:  "Failed to start Java: " + err.Error(),
+			Time:     time.Now().UTC().Format(time.RFC3339),
+		})
+		return domain.LocalServerRunState{}, err
+	}
+
+	a.markLocalServerRunning(runningKey, command, stdin)
+	reserved = false
+
+	a.emitLocalServerEvent(domain.LocalServerEvent{
+		ServerID: id,
+		Status:   domain.LaunchRunning,
+		Message:  "Local server process started",
+		Time:     startedAt,
+	})
+
+	go a.streamLocalServerOutput(id, "stdout", stdout)
+	go a.streamLocalServerOutput(id, "stderr", stderr)
+	go a.waitForLocalServer(id, runningKey, command)
+
+	return domain.LocalServerRunState{
+		ServerID:  id,
+		Status:    domain.LaunchRunning,
+		Message:   "Local server process started",
+		StartedAt: startedAt,
+	}, nil
+}
+
+func (a *App) StopLocalServer(id string) (domain.LocalServerRunState, error) {
+	if err := a.ensureReady(); err != nil {
+		return domain.LocalServerRunState{}, err
+	}
+	runningKey := localServerRunningKey(id)
+	command, stdin, err := a.runningLocalServer(runningKey)
+	if err != nil {
+		return domain.LocalServerRunState{}, err
+	}
+	if command.Process == nil {
+		return domain.LocalServerRunState{}, fmt.Errorf("local server process is not running")
+	}
+	a.markLaunchStopping(runningKey)
+	message := "Stop command sent"
+	if stdin != nil {
+		if _, err := io.WriteString(stdin, "stop\n"); err == nil {
+			now := time.Now().UTC().Format(time.RFC3339)
+			a.emitLocalServerEvent(domain.LocalServerEvent{
+				ServerID: id,
+				Status:   domain.LaunchRunning,
+				Message:  message,
+				Time:     now,
+			})
+			return domain.LocalServerRunState{
+				ServerID: id,
+				Status:   domain.LaunchRunning,
+				Message:  message,
+			}, nil
+		}
+	}
+	message = "Stop signal sent"
+	if err := command.Process.Signal(os.Interrupt); err != nil {
+		if killErr := command.Process.Kill(); killErr != nil {
+			return domain.LocalServerRunState{}, fmt.Errorf("stop local server: %w", err)
+		}
+		message = "Stop kill sent"
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	a.emitLocalServerEvent(domain.LocalServerEvent{
+		ServerID: id,
+		Status:   domain.LaunchRunning,
+		Message:  message,
+		Time:     now,
+	})
+	return domain.LocalServerRunState{
+		ServerID: id,
+		Status:   domain.LaunchRunning,
+		Message:  message,
+	}, nil
+}
+
 func (a *App) javaPathForProfile(profile domain.Profile, fallbackPath string) (string, int, error) {
 	runtime, err := a.profileJavaRuntime(profile, fallbackPath)
 	if err != nil {
@@ -2025,6 +2298,38 @@ func (a *App) ensureProfileJavaRuntime(profile domain.Profile, fallbackPath stri
 	return javaPath, runtime.RequiredMajor, nil
 }
 
+func (a *App) ensureMinecraftJavaRuntime(minecraftVersion string, fallbackPath string, beforeInstall func(required int)) (string, int, error) {
+	requiredJava, err := a.minecraftService.RequiredJavaVersion(minecraftVersion)
+	if err != nil {
+		return "", 0, err
+	}
+	if requiredJava <= 0 {
+		return "", 0, fmt.Errorf("minecraft %s has no resolvable Java runtime requirement", minecraftVersion)
+	}
+	if javaPath, ok := a.javaService.InstalledTemurin(a.ctx, requiredJava); ok {
+		return javaPath, requiredJava, nil
+	}
+	status := a.javaService.Validate(a.ctx, fallbackPath)
+	if status.OK && javasvc.CompatibleMajor(javasvc.MajorVersion(status.Version), requiredJava) {
+		return fallbackPath, requiredJava, nil
+	}
+	if beforeInstall != nil {
+		beforeInstall(requiredJava)
+	}
+	javaPath, err := a.javaService.InstallTemurin(a.ctx, requiredJava, a.emitJavaProgress)
+	if err != nil {
+		return "", requiredJava, err
+	}
+	status = a.javaService.Validate(a.ctx, javaPath)
+	if !status.OK {
+		return "", requiredJava, errors.New(status.Message)
+	}
+	if !javasvc.CompatibleMajor(javasvc.MajorVersion(status.Version), requiredJava) {
+		return "", requiredJava, fmt.Errorf("minecraft %s requires Java %d; installed runtime is Java %s", minecraftVersion, requiredJava, status.Version)
+	}
+	return javaPath, requiredJava, nil
+}
+
 func (a *App) profileJavaRuntime(profile domain.Profile, fallbackPath string) (domain.ProfileJavaRuntime, error) {
 	requiredJava, err := a.minecraftService.RequiredJavaVersion(profile.MinecraftVersion)
 	if err != nil {
@@ -2066,7 +2371,7 @@ func (a *App) reserveLaunch(profileID string) error {
 	a.launchMu.Lock()
 	defer a.launchMu.Unlock()
 	if _, ok := a.running[profileID]; ok {
-		return fmt.Errorf("profile is already running")
+		return fmt.Errorf("process is already running")
 	}
 	a.running[profileID] = nil
 	return nil
@@ -2078,10 +2383,62 @@ func (a *App) markLaunchRunning(profileID string, command *exec.Cmd) {
 	a.running[profileID] = command
 }
 
+func (a *App) markLocalServerRunning(profileID string, command *exec.Cmd, stdin io.WriteCloser) {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
+	a.running[profileID] = command
+	if a.serverInputs == nil {
+		a.serverInputs = make(map[string]io.WriteCloser)
+	}
+	a.serverInputs[profileID] = stdin
+}
+
+func (a *App) runningCommand(profileID string) (*exec.Cmd, error) {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
+	command, ok := a.running[profileID]
+	if !ok || command == nil {
+		return nil, fmt.Errorf("process is not running")
+	}
+	return command, nil
+}
+
+func (a *App) runningLocalServer(profileID string) (*exec.Cmd, io.WriteCloser, error) {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
+	command, ok := a.running[profileID]
+	if !ok || command == nil {
+		return nil, nil, fmt.Errorf("process is not running")
+	}
+	return command, a.serverInputs[profileID], nil
+}
+
+func (a *App) markLaunchStopping(profileID string) {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
+	if a.stopping == nil {
+		a.stopping = make(map[string]bool)
+	}
+	a.stopping[profileID] = true
+}
+
+func (a *App) takeLaunchStopping(profileID string) bool {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
+	stopping := a.stopping[profileID]
+	delete(a.stopping, profileID)
+	return stopping
+}
+
 func (a *App) releaseLaunch(profileID string) {
 	a.launchMu.Lock()
 	defer a.launchMu.Unlock()
+	if input := a.serverInputs[profileID]; input != nil {
+		_ = input.Close()
+	}
 	delete(a.running, profileID)
+	delete(a.serverInputs, profileID)
+	delete(a.stopping, profileID)
 }
 
 func (a *App) emitInstallProgress(event domain.InstallProgress) {
@@ -2096,6 +2453,13 @@ func (a *App) emitJavaProgress(event domain.JavaInstallProgress) {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, "java:progress", event)
+}
+
+func (a *App) emitLocalServerProgress(event domain.LocalServerProgress) {
+	if a.ctx == nil || a.headless {
+		return
+	}
+	wailsruntime.EventsEmit(a.ctx, "server:progress", event)
 }
 
 func (a *App) streamLaunchOutput(profileID string, stream string, reader io.Reader) {
@@ -2121,6 +2485,29 @@ func (a *App) streamLaunchOutput(profileID string, stream string, reader io.Read
 	}
 }
 
+func (a *App) streamLocalServerOutput(serverID string, stream string, reader io.Reader) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		a.emitLocalServerEvent(domain.LocalServerEvent{
+			ServerID: serverID,
+			Status:   domain.LaunchRunning,
+			Stream:   stream,
+			Message:  scanner.Text(),
+			Time:     time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		a.emitLocalServerEvent(domain.LocalServerEvent{
+			ServerID: serverID,
+			Status:   domain.LaunchFailed,
+			Stream:   stream,
+			Message:  "Log stream failed: " + err.Error(),
+			Time:     time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+}
+
 func (a *App) waitForLaunch(profileID string, command *exec.Cmd) {
 	err := command.Wait()
 	exitCode := command.ProcessState.ExitCode()
@@ -2142,11 +2529,47 @@ func (a *App) waitForLaunch(profileID string, command *exec.Cmd) {
 	})
 }
 
+func (a *App) waitForLocalServer(serverID string, runningKey string, command *exec.Cmd) {
+	err := command.Wait()
+	exitCode := 0
+	if command.ProcessState != nil {
+		exitCode = command.ProcessState.ExitCode()
+	}
+	stopping := a.takeLaunchStopping(runningKey)
+	status := domain.LaunchStopped
+	message := "Local server process stopped"
+	if err != nil && !stopping {
+		status = domain.LaunchFailed
+		message = "Local server process failed: " + err.Error()
+	}
+
+	a.releaseLaunch(runningKey)
+
+	a.emitLocalServerEvent(domain.LocalServerEvent{
+		ServerID: serverID,
+		Status:   status,
+		Message:  message,
+		ExitCode: exitCode,
+		Time:     time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
 func (a *App) emitLaunchEvent(event domain.LaunchEvent) {
 	if a.ctx == nil || a.headless {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, "launch:event", event)
+}
+
+func (a *App) emitLocalServerEvent(event domain.LocalServerEvent) {
+	if a.ctx == nil || a.headless {
+		return
+	}
+	wailsruntime.EventsEmit(a.ctx, "server:event", event)
+}
+
+func localServerRunningKey(id string) string {
+	return "server:" + id
 }
 
 func modpackDefaultFilename(name string) string {
@@ -2251,7 +2674,7 @@ func (a *App) ensureReady() error {
 	if a.startupErr != nil {
 		return a.startupErr
 	}
-	if a.settingsService == nil || a.profileService == nil || a.catalogService == nil || a.minecraftService == nil || a.javaService == nil || a.modpackService == nil || a.modsService == nil {
+	if a.settingsService == nil || a.profileService == nil || a.catalogService == nil || a.minecraftService == nil || a.javaService == nil || a.modpackService == nil || a.modsService == nil || a.serverService == nil {
 		return errors.New("application services are not initialized")
 	}
 	return nil

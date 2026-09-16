@@ -1,14 +1,14 @@
 export namespace domain {
-	
+
 	export class AccountConfig {
 	    mode: string;
 	    offlineName?: string;
 	    offlineUuid?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AccountConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
@@ -19,11 +19,11 @@ export namespace domain {
 	export class AppInfo {
 	    name: string;
 	    version: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AppInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -39,11 +39,11 @@ export namespace domain {
 	    size: number;
 	    truncated: boolean;
 	    maxBytes: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new GameLogContent(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -63,11 +63,11 @@ export namespace domain {
 	    size: number;
 	    updatedAt: string;
 	    compressed: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new GameLogFile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.fileName = source["fileName"];
@@ -82,18 +82,18 @@ export namespace domain {
 	    profileId: string;
 	    logsDir: string;
 	    files: GameLogFile[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new GameLogList(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
 	        this.logsDir = source["logsDir"];
 	        this.files = this.convertValues(source["files"], GameLogFile);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -119,11 +119,11 @@ export namespace domain {
 	    updatedAt?: string;
 	    lastError?: string;
 	    baseVersion?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new InstallState(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];
@@ -140,11 +140,11 @@ export namespace domain {
 	    version?: string;
 	    message: string;
 	    checkedAt: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new JavaStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -161,11 +161,11 @@ export namespace domain {
 	    exitCode?: number;
 	    startedAt?: string;
 	    endedAt?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new LaunchState(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -179,15 +179,169 @@ export namespace domain {
 	export class LoaderConfig {
 	    type: string;
 	    version?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new LoaderConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
 	        this.version = source["version"];
+	    }
+	}
+	export class MemorySettings {
+	    minMB: number;
+	    maxMB: number;
+
+	    static createFrom(source: any = {}) {
+	        return new MemorySettings(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.minMB = source["minMB"];
+	        this.maxMB = source["maxMB"];
+	    }
+	}
+	export class LocalServer {
+	    id: string;
+	    name: string;
+	    minecraftVersion: string;
+	    serverDir: string;
+	    memory: MemorySettings;
+	    port: number;
+	    eulaAccepted: boolean;
+	    install: InstallState;
+	    createdAt: string;
+	    updatedAt: string;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalServer(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.minecraftVersion = source["minecraftVersion"];
+	        this.serverDir = source["serverDir"];
+	        this.memory = this.convertValues(source["memory"], MemorySettings);
+	        this.port = source["port"];
+	        this.eulaAccepted = source["eulaAccepted"];
+	        this.install = this.convertValues(source["install"], InstallState);
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LocalServerInput {
+	    name: string;
+	    minecraftVersion: string;
+	    serverDir?: string;
+	    memory: MemorySettings;
+	    port: number;
+	    eulaAccepted: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalServerInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.minecraftVersion = source["minecraftVersion"];
+	        this.serverDir = source["serverDir"];
+	        this.memory = this.convertValues(source["memory"], MemorySettings);
+	        this.port = source["port"];
+	        this.eulaAccepted = source["eulaAccepted"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LocalServerList {
+	    servers: LocalServer[];
+
+	    static createFrom(source: any = {}) {
+	        return new LocalServerList(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.servers = this.convertValues(source["servers"], LocalServer);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LocalServerRunState {
+	    serverId: string;
+	    status: string;
+	    message: string;
+	    exitCode?: number;
+	    startedAt?: string;
+	    endedAt?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalServerRunState(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.serverId = source["serverId"];
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.exitCode = source["exitCode"];
+	        this.startedAt = source["startedAt"];
+	        this.endedAt = source["endedAt"];
 	    }
 	}
 	export class LogExportResult {
@@ -210,20 +364,7 @@ export namespace domain {
 	        this.launcherEventsExported = source["launcherEventsExported"];
 	    }
 	}
-	export class MemorySettings {
-	    minMB: number;
-	    maxMB: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new MemorySettings(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.minMB = source["minMB"];
-	        this.maxMB = source["maxMB"];
-	    }
-	}
+
 	export class ModFile {
 	    fileName: string;
 	    displayName: string;
@@ -232,11 +373,11 @@ export namespace domain {
 	    size: number;
 	    updatedAt: string;
 	    sha1?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModFile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.fileName = source["fileName"];
@@ -252,18 +393,18 @@ export namespace domain {
 	    profileId: string;
 	    modsDir: string;
 	    mods: ModFile[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModList(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
 	        this.modsDir = source["modsDir"];
 	        this.mods = this.convertValues(source["mods"], ModFile);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -289,11 +430,11 @@ export namespace domain {
 	    path: string;
 	    filesExported: number;
 	    overridesExported: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModpackExportResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -315,11 +456,11 @@ export namespace domain {
 	    install: InstallState;
 	    createdAt: string;
 	    updatedAt: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Profile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -333,7 +474,7 @@ export namespace domain {
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -359,11 +500,11 @@ export namespace domain {
 	    filesInstalled: number;
 	    filesSkipped: number;
 	    overridesInstalled: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModpackImportResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profile = this.convertValues(source["profile"], Profile);
@@ -373,7 +514,7 @@ export namespace domain {
 	        this.filesSkipped = source["filesSkipped"];
 	        this.overridesInstalled = source["overridesInstalled"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -402,11 +543,11 @@ export namespace domain {
 	    displayName: string;
 	    dependencyType?: string;
 	    reason?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthDeleteFile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.projectId = source["projectId"];
@@ -427,11 +568,11 @@ export namespace domain {
 	    files?: ModrinthDeleteFile[];
 	    skippedFiles?: ModrinthDeleteFile[];
 	    tracked: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthDeletePlan(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -441,7 +582,7 @@ export namespace domain {
 	        this.skippedFiles = this.convertValues(source["skippedFiles"], ModrinthDeleteFile);
 	        this.tracked = source["tracked"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -467,11 +608,11 @@ export namespace domain {
 	    deletedFiles?: ModrinthDeleteFile[];
 	    skippedFiles?: ModrinthDeleteFile[];
 	    modList: ModList;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthDeleteResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -481,7 +622,7 @@ export namespace domain {
 	        this.skippedFiles = this.convertValues(source["skippedFiles"], ModrinthDeleteFile);
 	        this.modList = this.convertValues(source["modList"], ModList);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -505,11 +646,11 @@ export namespace domain {
 	    projectId?: string;
 	    fileName?: string;
 	    dependencyType: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthDependency(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.versionId = source["versionId"];
@@ -521,17 +662,17 @@ export namespace domain {
 	export class ModrinthSkippedDependency {
 	    dependency: ModrinthDependency;
 	    reason: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthSkippedDependency(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.dependency = this.convertValues(source["dependency"], ModrinthDependency);
 	        this.reason = source["reason"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -559,11 +700,11 @@ export namespace domain {
 	    fileName: string;
 	    displayName: string;
 	    alreadyPresent?: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthRequiredDependency(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.projectId = source["projectId"];
@@ -586,11 +727,11 @@ export namespace domain {
 	    fileName: string;
 	    requiredDependencies?: ModrinthRequiredDependency[];
 	    skippedDependencies?: ModrinthSkippedDependency[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthInstallPlan(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -603,7 +744,7 @@ export namespace domain {
 	        this.requiredDependencies = this.convertValues(source["requiredDependencies"], ModrinthRequiredDependency);
 	        this.skippedDependencies = this.convertValues(source["skippedDependencies"], ModrinthSkippedDependency);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -631,11 +772,11 @@ export namespace domain {
 	    displayName: string;
 	    dependencyType?: string;
 	    alreadyPresent?: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthInstalledFile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.projectId = source["projectId"];
@@ -660,11 +801,11 @@ export namespace domain {
 	    dependencies?: ModrinthDependency[];
 	    installedFiles?: ModrinthInstalledFile[];
 	    skippedDependencies?: ModrinthSkippedDependency[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthInstallResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -679,7 +820,7 @@ export namespace domain {
 	        this.installedFiles = this.convertValues(source["installedFiles"], ModrinthInstalledFile);
 	        this.skippedDependencies = this.convertValues(source["skippedDependencies"], ModrinthSkippedDependency);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -698,7 +839,7 @@ export namespace domain {
 		    return a;
 		}
 	}
-	
+
 	export class ModrinthProject {
 	    projectId: string;
 	    slug: string;
@@ -721,11 +862,11 @@ export namespace domain {
 	    gameVersions?: string[];
 	    loaders?: string[];
 	    displayVersion?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthProject(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.projectId = source["projectId"];
@@ -751,7 +892,7 @@ export namespace domain {
 	        this.displayVersion = source["displayVersion"];
 	    }
 	}
-	
+
 	export class ModrinthSearchResult {
 	    profileId: string;
 	    query: string;
@@ -759,11 +900,11 @@ export namespace domain {
 	    loader: string;
 	    totalHits: number;
 	    hits: ModrinthProject[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthSearchResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -773,7 +914,7 @@ export namespace domain {
 	        this.totalHits = source["totalHits"];
 	        this.hits = this.convertValues(source["hits"], ModrinthProject);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -792,7 +933,7 @@ export namespace domain {
 		    return a;
 		}
 	}
-	
+
 	export class ModrinthUpdatePlan {
 	    profileId: string;
 	    projectId: string;
@@ -810,11 +951,11 @@ export namespace domain {
 	    requiredDependencies?: ModrinthRequiredDependency[];
 	    skippedDependencies?: ModrinthSkippedDependency[];
 	    checkError?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthUpdatePlan(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -834,7 +975,7 @@ export namespace domain {
 	        this.skippedDependencies = this.convertValues(source["skippedDependencies"], ModrinthSkippedDependency);
 	        this.checkError = source["checkError"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -865,11 +1006,11 @@ export namespace domain {
 	    deletedFiles?: ModrinthDeleteFile[];
 	    skippedFiles?: ModrinthDeleteFile[];
 	    skippedDependencies?: ModrinthSkippedDependency[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthUpdateResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -884,7 +1025,7 @@ export namespace domain {
 	        this.skippedFiles = this.convertValues(source["skippedFiles"], ModrinthDeleteFile);
 	        this.skippedDependencies = this.convertValues(source["skippedDependencies"], ModrinthSkippedDependency);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -909,11 +1050,11 @@ export namespace domain {
 	    size: number;
 	    primary: boolean;
 	    sha1?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthVersionFile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.url = source["url"];
@@ -935,11 +1076,11 @@ export namespace domain {
 	    loaders: string[];
 	    file: ModrinthVersionFile;
 	    dependencies?: ModrinthDependency[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModrinthVersion(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -954,7 +1095,7 @@ export namespace domain {
 	        this.file = this.convertValues(source["file"], ModrinthVersionFile);
 	        this.dependencies = this.convertValues(source["dependencies"], ModrinthDependency);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -973,22 +1114,22 @@ export namespace domain {
 		    return a;
 		}
 	}
-	
+
 	export class NetworkSettings {
 	    retryCount: number;
 	    metadataTtlHours: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new NetworkSettings(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.retryCount = source["retryCount"];
 	        this.metadataTtlHours = source["metadataTtlHours"];
 	    }
 	}
-	
+
 	export class ProfileInput {
 	    name: string;
 	    minecraftVersion: string;
@@ -996,11 +1137,11 @@ export namespace domain {
 	    account?: AccountConfig;
 	    gameDir?: string;
 	    memory: MemorySettings;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ProfileInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -1010,7 +1151,7 @@ export namespace domain {
 	        this.gameDir = source["gameDir"];
 	        this.memory = this.convertValues(source["memory"], MemorySettings);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1036,11 +1177,11 @@ export namespace domain {
 	    javaPath?: string;
 	    version?: string;
 	    message: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ProfileJavaRuntime(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
@@ -1054,17 +1195,17 @@ export namespace domain {
 	export class ProfileList {
 	    selectedProfileId: string;
 	    profiles: Profile[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ProfileList(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.selectedProfileId = source["selectedProfileId"];
 	        this.profiles = this.convertValues(source["profiles"], Profile);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1089,11 +1230,11 @@ export namespace domain {
 	    account: AccountConfig;
 	    defaultMemory: MemorySettings;
 	    network: NetworkSettings;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.dataDir = source["dataDir"];
@@ -1102,7 +1243,7 @@ export namespace domain {
 	        this.defaultMemory = this.convertValues(source["defaultMemory"], MemorySettings);
 	        this.network = this.convertValues(source["network"], NetworkSettings);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1127,11 +1268,11 @@ export namespace domain {
 	    type?: string;
 	    stable: boolean;
 	    latest: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new VersionOption(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -1158,11 +1299,11 @@ export namespace domain {
 	    forgeLoaderUpdatedAt?: string;
 	    neoForgeLoaderUpdatedAt?: string;
 	    warnings?: string[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new VersionCatalog(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.minecraftVersions = this.convertValues(source["minecraftVersions"], VersionOption);
@@ -1182,7 +1323,7 @@ export namespace domain {
 	        this.neoForgeLoaderUpdatedAt = source["neoForgeLoaderUpdatedAt"];
 	        this.warnings = source["warnings"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
