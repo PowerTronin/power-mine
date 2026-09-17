@@ -183,6 +183,8 @@ type LocalServerRunState = {
 
 type LogLevelFilter = 'all' | LauncherLog['level'];
 type LogsMode = 'launcher' | 'game';
+type InstallationFilter = 'all' | 'clients' | 'servers';
+type LibrarySelectionType = 'profile' | 'server';
 
 const navItems: Array<{ id: Screen; label: string; mark: string }> = [
     {id: 'home', label: 'Home', mark: 'H'},
@@ -244,7 +246,9 @@ function App() {
     const [launcherLogs, setLauncherLogs] = useState<LauncherLog[]>([]);
     const [selectedProfileId, setSelectedProfileId] = useState('');
     const [selectedLocalServerId, setSelectedLocalServerId] = useState('');
+    const [librarySelectionType, setLibrarySelectionType] = useState<LibrarySelectionType>('profile');
     const [profileSettingsId, setProfileSettingsId] = useState('');
+    const [localServerSettingsId, setLocalServerSettingsId] = useState('');
     const [profileSettingsDraft, setProfileSettingsDraft] = useState<ProfileSettingsDraft | null>(null);
     const [modActionKey, setModActionKey] = useState('');
     const [gameLogActionKey, setGameLogActionKey] = useState('');
@@ -287,12 +291,42 @@ function App() {
         () => localServers.find((server) => server.id === selectedLocalServerId) ?? localServers[0],
         [localServers, selectedLocalServerId]
     );
-    const selectedProgress = selectedProfile ? installProgress[selectedProfile.id] : undefined;
-    const selectedLaunch = selectedProfile ? launchStates[selectedProfile.id] : undefined;
-    const selectedJavaRuntime = selectedProfile ? profileJavaRuntimes[selectedProfile.id] : undefined;
-    const selectedModList = selectedProfile ? profileModLists[selectedProfile.id] : undefined;
-    const selectedModrinthUpdatePlans = selectedProfile ? modrinthUpdatePlans[selectedProfile.id] ?? [] : [];
-    const selectedSettingsOpen = !!selectedProfile && profileSettingsId === selectedProfile.id;
+    const settingsProfile = useMemo(
+        () => profiles.find((profile) => profile.id === profileSettingsId),
+        [profiles, profileSettingsId]
+    );
+    const settingsLocalServer = useMemo(
+        () => localServers.find((server) => server.id === localServerSettingsId),
+        [localServers, localServerSettingsId]
+    );
+    const settingsProfileModList = settingsProfile ? profileModLists[settingsProfile.id] : undefined;
+    const settingsProfileUpdatePlans = settingsProfile ? modrinthUpdatePlans[settingsProfile.id] ?? [] : [];
+    const settingsProfileJavaRuntime = settingsProfile ? profileJavaRuntimes[settingsProfile.id] : undefined;
+    const libraryDetailType: LibrarySelectionType = (() => {
+        if (librarySelectionType === 'server' && selectedLocalServer) {
+            return 'server';
+        }
+        if (librarySelectionType === 'profile' && selectedProfile) {
+            return 'profile';
+        }
+        if (selectedProfile) {
+            return 'profile';
+        }
+        if (selectedLocalServer) {
+            return 'server';
+        }
+        return librarySelectionType;
+    })();
+    const librarySelectedProfile = libraryDetailType === 'profile' ? selectedProfile : undefined;
+    const librarySelectedLocalServer = libraryDetailType === 'server' ? selectedLocalServer : undefined;
+    const libraryProfileProgress = librarySelectedProfile ? installProgress[librarySelectedProfile.id] : undefined;
+    const libraryProfileLaunch = librarySelectedProfile ? launchStates[librarySelectedProfile.id] : undefined;
+    const libraryProfileJavaRuntime = librarySelectedProfile ? profileJavaRuntimes[librarySelectedProfile.id] : undefined;
+    const libraryProfileModList = librarySelectedProfile ? profileModLists[librarySelectedProfile.id] : undefined;
+    const libraryProfileUpdatePlans = librarySelectedProfile ? modrinthUpdatePlans[librarySelectedProfile.id] ?? [] : [];
+    const libraryLocalServerProgress = librarySelectedLocalServer ? localServerProgress[librarySelectedLocalServer.id] : undefined;
+    const libraryLocalServerRun = librarySelectedLocalServer ? localServerRunStates[librarySelectedLocalServer.id] : undefined;
+    const libraryTotalCount = profiles.length + localServers.length;
     const selectedLogs = useMemo(
         () => launcherLogs.filter((log) => {
             if (log.profileId) {
@@ -838,7 +872,8 @@ function App() {
                 message: `Created ${profile.name}. Account is ${accountLabel(account)}.`,
                 profileId: profile.id,
             });
-            setScreen('library');
+            setLibrarySelectionType('profile');
+            navigateToScreen('library');
         } catch (err) {
             setError(errorText(err));
             appendLog({
@@ -886,6 +921,7 @@ function App() {
             }));
             setLocalServers((current) => [...current, server]);
             setSelectedLocalServerId(server.id);
+            setLibrarySelectionType('server');
             setLocalServerForm((current) => ({
                 ...current,
                 name: defaultLocalServerForm.name,
@@ -899,6 +935,7 @@ function App() {
                 serverId: server.id,
             });
             await installLocalServer(server.id);
+            navigateToScreen('library');
         } catch (err) {
             const text = errorText(err);
             setError(text);
@@ -954,6 +991,7 @@ function App() {
                 },
             }));
             setSelectedLocalServerId(server.id);
+            setLibrarySelectionType('server');
             setMessage(server.install?.message || `${successMessage}.`);
             appendLog({
                 level: server.install?.status === 'failed' ? 'error' : 'success',
@@ -1085,7 +1123,7 @@ function App() {
         }
     }
 
-    async function openLocalServerSettings(id: string) {
+    async function openLocalServerSettingsFile(id: string) {
         try {
             setError('');
             setLocalServerActionKey(`${id}:settings`);
@@ -1093,7 +1131,7 @@ function App() {
             appendLog({
                 level: 'info',
                 source: 'Server settings',
-                message: 'Local server settings opened.',
+                message: 'Local server raw settings opened.',
                 serverId: id,
             });
         } catch (err) {
@@ -1108,6 +1146,15 @@ function App() {
         } finally {
             setLocalServerActionKey('');
         }
+    }
+
+    function openLocalServerSettings(server: domain.LocalServer) {
+        setSelectedLocalServerId(server.id);
+        setLocalServerSettingsId(server.id);
+    }
+
+    function closeLocalServerSettings() {
+        setLocalServerSettingsId('');
     }
 
     async function openLocalServerTerminal(id: string) {
@@ -1167,7 +1214,8 @@ function App() {
                 message: modpackImportMessage(result),
                 profileId: result.profile.id,
             });
-            setScreen('library');
+            setLibrarySelectionType('profile');
+            navigateToScreen('library');
         } catch (err) {
             const text = errorText(err);
             setError(text);
@@ -1185,6 +1233,7 @@ function App() {
     async function selectProfile(id: string) {
         try {
             setError('');
+            setLibrarySelectionType('profile');
             const profileList = await SelectProfile(id);
             setProfiles(profileList.profiles ?? []);
             setSelectedProfileId(profileList.selectedProfileId);
@@ -1198,6 +1247,11 @@ function App() {
                 profileId: id,
             });
         }
+    }
+
+    function selectLocalServer(id: string) {
+        setSelectedLocalServerId(id);
+        setLibrarySelectionType('server');
     }
 
     async function deleteProfile(id: string) {
@@ -2167,7 +2221,7 @@ function App() {
 
     async function browseProfileMod(profileId: string, projectId: string, query: string) {
         const cleanQuery = modBrowseQuery(query);
-        setScreen('browse');
+        navigateToScreen('browse');
         setBrowseProfileId(profileId);
         setBrowseQuery(cleanQuery);
         setBrowseResults(null);
@@ -2354,25 +2408,19 @@ function App() {
         return (
             <LocalServerQuickPanel
                 servers={localServers}
-                selectedServer={selectedLocalServer}
-                selectedServerId={selectedLocalServer?.id ?? selectedLocalServerId}
                 form={localServerForm}
                 minecraftVersions={minecraftVersions}
-                progressByServer={localServerProgress}
-                runStates={localServerRunStates}
                 actionKey={localServerActionKey}
-                onSelectServer={setSelectedLocalServerId}
                 onFormChange={setLocalServerForm}
                 onCreate={createLocalServer}
-                onInstall={installLocalServer}
-                onRepair={repairLocalServer}
-                onStart={startLocalServer}
-                onStop={stopLocalServer}
-                onOpenFolder={openLocalServerFolder}
-                onOpenSettings={openLocalServerSettings}
-                onOpenTerminal={openLocalServerTerminal}
             />
         );
+    }
+
+    function navigateToScreen(nextScreen: Screen) {
+        closeProfileSettings();
+        closeLocalServerSettings();
+        setScreen(nextScreen);
     }
 
     return (
@@ -2395,7 +2443,7 @@ function App() {
                                     key={item.id}
                                     type="button"
                                     className={active ? 'nav-item active' : 'nav-item'}
-                                    onClick={() => setScreen(item.id)}
+                                    onClick={() => navigateToScreen(item.id)}
                                     aria-current={active ? 'page' : undefined}
                                 >
                                     <span className="nav-mark">{item.mark}</span>
@@ -2410,7 +2458,7 @@ function App() {
                 <button
                     className={screen === 'account' ? 'rail-card rail-card-button active' : 'rail-card rail-card-button'}
                     type="button"
-                    onClick={() => setScreen('account')}
+                    onClick={() => navigateToScreen('account')}
                     aria-current={screen === 'account' ? 'page' : undefined}
                     aria-label="Open account settings"
                 >
@@ -2466,7 +2514,7 @@ function App() {
                         minecraftVersions={minecraftVersions}
                         selectedLogs={selectedLogs}
                         onSelectProfile={selectProfile}
-                        onSelectLocalServer={setSelectedLocalServerId}
+                        onSelectLocalServer={selectLocalServer}
                         onLocalServerFormChange={setLocalServerForm}
                         onCreateLocalServer={createLocalServer}
                         onInstallLocalServer={installLocalServer}
@@ -2482,71 +2530,103 @@ function App() {
                         onLaunchProfile={launchProfile}
                         onOpenBrowse={(profileId) => {
                             setBrowseProfileId(profileId);
-                            setScreen('browse');
+                            navigateToScreen('browse');
                         }}
-                        onOpenCreate={() => setScreen('create')}
-                        onOpenLibrary={(profile) => {
-                            if (profile) {
-                                openProfileSettings(profile);
-                            }
-                            setScreen('library');
-                        }}
-                        onOpenLogs={() => setScreen('logs')}
+                        onOpenCreate={() => navigateToScreen('create')}
+                        onOpenProfileSettings={openProfileSettings}
+                        onOpenLogs={() => navigateToScreen('logs')}
                     />
                 )}
 
                 {screen === 'library' && (
                     <section className="library-layout">
                         <div className="profile-list">
-                            {profiles.length === 0 && <EmptyState title="No profiles" action="Library is empty."/>}
+                            {libraryTotalCount === 0 && <EmptyState title="No installations" action="Create a profile or local server."/>}
                             {profiles.map((profile) => (
                                 <button
                                     key={profile.id}
-                                    className={selectedProfile?.id === profile.id ? 'profile-row active' : 'profile-row'}
+                                    className={libraryDetailType === 'profile' && librarySelectedProfile?.id === profile.id ? 'profile-row active' : 'profile-row'}
                                     type="button"
                                     onClick={() => selectProfile(profile.id)}
                                 >
-                                    <strong>{profile.name}</strong>
+                                    <div className="installation-title">
+                                        <strong>{profile.name}</strong>
+                                        <span>Client</span>
+                                    </div>
                                     <span>{profileSubtitle(profile)}</span>
                                     <small>{installStatusText(profile)}</small>
                                 </button>
                             ))}
+                            {localServers.map((server) => {
+                                const progress = localServerProgress[server.id];
+                                const run = localServerRunStates[server.id];
+                                const active = libraryDetailType === 'server' && librarySelectedLocalServer?.id === server.id;
+
+                                return (
+                                    <button
+                                        key={`server:${server.id}`}
+                                        className={active ? 'profile-row active' : 'profile-row'}
+                                        type="button"
+                                        onClick={() => selectLocalServer(server.id)}
+                                    >
+                                        <div className="installation-title">
+                                            <strong>{server.name}</strong>
+                                            <span>Server</span>
+                                        </div>
+                                        <span>{localServerSubtitle(server)}</span>
+                                        <small>{localServerStatusText(server, progress, run)}</small>
+                                    </button>
+                                );
+                            })}
                         </div>
-                        <ProfileDetail
-                            profile={selectedProfile}
-                            progress={selectedProgress}
-                            launch={selectedLaunch}
-                            javaRuntime={selectedJavaRuntime}
-                            javaInstallProgress={javaInstallProgress}
-                            modList={selectedModList}
-                            modrinthUpdatePlans={selectedModrinthUpdatePlans}
-                            modActionKey={modActionKey}
-                            settingsOpen={selectedSettingsOpen}
-                            settingsDraft={selectedSettingsOpen ? profileSettingsDraft : null}
-                            onDelete={deleteProfile}
-                            onInstall={installProfile}
-                            onRepair={repairProfile}
-                            onInstallJava={installJava}
-                            onLaunch={launchProfile}
-                            onOpenSettings={openProfileSettings}
-                            onCloseSettings={closeProfileSettings}
-                            onSettingsDraftChange={setProfileSettingsDraft}
-                            onSaveSettings={saveProfileSettings}
-                            onRefreshMods={reloadProfileMods}
-                            onImportMod={importProfileMod}
-                            onExportModpack={exportProfileModpack}
-                            onOpenModsFolder={openProfileModsFolder}
-                            onCheckModrinthUpdates={refreshModrinthUpdates}
-                            onUpdateModrinthProject={updateModrinthMod}
-                            onUpdateModrinthFile={updateModrinthModFile}
-                            onBrowseMod={browseProfileMod}
-                            onToggleMod={toggleProfileMod}
-                            onBulkToggleMods={bulkToggleProfileMods}
-                            onDeleteMod={removeProfileMod}
-                        />
-                        <div className="library-server-panel">
-                            {renderLocalServerPanel()}
-                        </div>
+                        {libraryDetailType === 'server' ? (
+                            <LocalServerDetail
+                                server={librarySelectedLocalServer}
+                                progress={libraryLocalServerProgress}
+                                run={libraryLocalServerRun}
+                                actionKey={localServerActionKey}
+                                onInstall={installLocalServer}
+                                onRepair={repairLocalServer}
+                                onStart={startLocalServer}
+                                onStop={stopLocalServer}
+                                onOpenFolder={openLocalServerFolder}
+                                onOpenSettings={openLocalServerSettings}
+                                onOpenTerminal={openLocalServerTerminal}
+                            />
+                        ) : (
+                            <ProfileDetail
+                                profile={librarySelectedProfile}
+                                progress={libraryProfileProgress}
+                                launch={libraryProfileLaunch}
+                                javaRuntime={libraryProfileJavaRuntime}
+                                javaInstallProgress={javaInstallProgress}
+                                modList={libraryProfileModList}
+                                modrinthUpdatePlans={libraryProfileUpdatePlans}
+                                modActionKey={modActionKey}
+                                settingsOpen={!!librarySelectedProfile && profileSettingsId === librarySelectedProfile.id}
+                                settingsDraft={profileSettingsDraft}
+                                onDelete={deleteProfile}
+                                onInstall={installProfile}
+                                onRepair={repairProfile}
+                                onInstallJava={installJava}
+                                onLaunch={launchProfile}
+                                onOpenSettings={openProfileSettings}
+                                onCloseSettings={closeProfileSettings}
+                                onSettingsDraftChange={setProfileSettingsDraft}
+                                onSaveSettings={saveProfileSettings}
+                                onRefreshMods={reloadProfileMods}
+                                onImportMod={importProfileMod}
+                                onExportModpack={exportProfileModpack}
+                                onOpenModsFolder={openProfileModsFolder}
+                                onCheckModrinthUpdates={refreshModrinthUpdates}
+                                onUpdateModrinthProject={updateModrinthMod}
+                                onUpdateModrinthFile={updateModrinthModFile}
+                                onBrowseMod={browseProfileMod}
+                                onToggleMod={toggleProfileMod}
+                                onBulkToggleMods={bulkToggleProfileMods}
+                                onDeleteMod={removeProfileMod}
+                            />
+                        )}
                     </section>
                 )}
 
@@ -2583,30 +2663,20 @@ function App() {
                                 onChange={(event) => setCreateForm({...createForm, name: event.target.value})}
                             />
                         </label>
-                        <label>
-                            Minecraft version
-                            <select
-                                value={createForm.minecraftVersion}
-                                onChange={(event) => {
-                                    const minecraftVersion = event.target.value;
-                                    setCreateForm({
-                                        ...createForm,
-                                        minecraftVersion,
-                                        loaderVersion: pickCurrentValue(
-                                            createForm.loaderVersion || 'latest',
-                                            loaderVersionOptions(createForm.loaderType, fabricLoaderVersions, quiltLoaderVersions, forgeLoaderVersions, neoForgeLoaderVersions, minecraftVersion)
-                                        ),
-                                    });
-                                }}
-                                disabled={minecraftVersions.length === 0}
-                            >
-                                {minecraftVersions.map((version) => (
-                                    <option key={version.id} value={version.id}>
-                                        {version.label}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
+                        <VersionPicker
+                            label="Minecraft version"
+                            value={createForm.minecraftVersion}
+                            versions={minecraftVersions}
+                            disabled={minecraftVersions.length === 0}
+                            onChange={(minecraftVersion) => setCreateForm({
+                                ...createForm,
+                                minecraftVersion,
+                                loaderVersion: pickCurrentValue(
+                                    createForm.loaderVersion || 'latest',
+                                    loaderVersionOptions(createForm.loaderType, fabricLoaderVersions, quiltLoaderVersions, forgeLoaderVersions, neoForgeLoaderVersions, minecraftVersion)
+                                ),
+                            })}
+                        />
                         <label>
                             Loader
                             <select
@@ -2842,6 +2912,48 @@ function App() {
                         onDelete={deleteModrinthMod}
                     />
                 )}
+                {settingsProfile && profileSettingsDraft && (
+                    <ProfileSettingsDialog
+                        profile={settingsProfile}
+                        draft={profileSettingsDraft}
+                        javaRuntime={settingsProfileJavaRuntime}
+                        javaInstallProgress={javaInstallProgress}
+                        modList={settingsProfileModList}
+                        modrinthUpdatePlans={settingsProfileUpdatePlans}
+                        modActionKey={modActionKey}
+                        onClose={closeProfileSettings}
+                        onDraftChange={setProfileSettingsDraft}
+                        onInstallJava={installJava}
+                        onSave={saveProfileSettings}
+                        onRefreshMods={reloadProfileMods}
+                        onImportMod={importProfileMod}
+                        onExportModpack={exportProfileModpack}
+                        onOpenModsFolder={openProfileModsFolder}
+                        onCheckModrinthUpdates={refreshModrinthUpdates}
+                        onUpdateModrinthProject={updateModrinthMod}
+                        onUpdateModrinthFile={updateModrinthModFile}
+                        onBrowseMod={browseProfileMod}
+                        onToggleMod={toggleProfileMod}
+                        onBulkToggleMods={bulkToggleProfileMods}
+                        onDeleteMod={removeProfileMod}
+                    />
+                )}
+                {settingsLocalServer && (
+                    <LocalServerSettingsDialog
+                        server={settingsLocalServer}
+                        progress={localServerProgress[settingsLocalServer.id]}
+                        run={localServerRunStates[settingsLocalServer.id]}
+                        actionKey={localServerActionKey}
+                        onClose={closeLocalServerSettings}
+                        onInstall={installLocalServer}
+                        onRepair={repairLocalServer}
+                        onStart={startLocalServer}
+                        onStop={stopLocalServer}
+                        onOpenFolder={openLocalServerFolder}
+                        onOpenRawSettings={openLocalServerSettingsFile}
+                        onOpenTerminal={openLocalServerTerminal}
+                    />
+                )}
                 {pendingModrinthInstall && (
                     <ModrinthDependencyConfirmDialog
                         plan={pendingModrinthInstall}
@@ -2869,6 +2981,84 @@ function App() {
                     />
                 )}
             </main>
+        </div>
+    );
+}
+
+function VersionPicker({
+    label,
+    value,
+    versions,
+    disabled,
+    onChange
+}: {
+    label: string;
+    value: string;
+    versions: domain.VersionOption[];
+    disabled?: boolean;
+    onChange: (value: string) => void;
+}) {
+    const [query, setQuery] = useState('');
+    const [open, setOpen] = useState(false);
+    const selected = versions.find((version) => version.id === value);
+    const selectedLabel = selected?.label ?? value;
+    const normalizedQuery = query.trim().toLowerCase();
+    const matches = versions
+        .filter((version) => version.id !== value)
+        .filter((version) => {
+            if (!normalizedQuery) {
+                return true;
+            }
+            const haystack = `${version.id} ${version.label} ${version.type ?? ''}`.toLowerCase();
+            return haystack.includes(normalizedQuery);
+        })
+        .slice(0, 80);
+    const showOptions = open && !disabled;
+
+    function selectVersion(nextValue: string) {
+        onChange(nextValue);
+        setQuery('');
+        setOpen(false);
+    }
+
+    return (
+        <div className="version-picker">
+            <span>{label}</span>
+            <input
+                value={query}
+                disabled={disabled}
+                placeholder={selectedLabel || 'Search versions'}
+                onFocus={() => setOpen(true)}
+                onChange={(event) => {
+                    setQuery(event.target.value);
+                    setOpen(true);
+                }}
+                onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+            />
+            <small>Current: {selectedLabel || 'none'}</small>
+            {showOptions && (
+                <div className="version-picker-popover">
+                    {selected && (
+                        <button type="button" className="version-picker-option current" onMouseDown={(event) => {
+                            event.preventDefault();
+                            selectVersion(selected.id);
+                        }} onClick={() => selectVersion(selected.id)}>
+                            <strong>{selected.label}</strong>
+                            <span>Current</span>
+                        </button>
+                    )}
+                    {matches.map((version) => (
+                        <button type="button" className="version-picker-option" key={version.id} onMouseDown={(event) => {
+                            event.preventDefault();
+                            selectVersion(version.id);
+                        }} onClick={() => selectVersion(version.id)}>
+                            <strong>{version.label}</strong>
+                            <span>{version.type || (version.stable ? 'Stable' : 'Version')}</span>
+                        </button>
+                    ))}
+                    {matches.length === 0 && <p className="version-picker-empty">No versions match this search.</p>}
+                </div>
+            )}
         </div>
     );
 }
@@ -2910,7 +3100,7 @@ function HomePanel({
     onLaunchProfile,
     onOpenBrowse,
     onOpenCreate,
-    onOpenLibrary,
+    onOpenProfileSettings,
     onOpenLogs
 }: {
     profiles: domain.Profile[];
@@ -2941,7 +3131,7 @@ function HomePanel({
     onStartLocalServer: (id: string) => void;
     onStopLocalServer: (id: string) => void;
     onOpenLocalServerFolder: (id: string) => void;
-    onOpenLocalServerSettings: (id: string) => void;
+    onOpenLocalServerSettings: (server: domain.LocalServer) => void;
     onOpenLocalServerTerminal: (id: string) => void;
     onInstallProfile: (id: string) => void;
     onRepairProfile: (id: string) => void;
@@ -2949,7 +3139,7 @@ function HomePanel({
     onLaunchProfile: (id: string) => void;
     onOpenBrowse: (profileId: string) => void;
     onOpenCreate: () => void;
-    onOpenLibrary: (profile?: domain.Profile) => void;
+    onOpenProfileSettings: (profile: domain.Profile) => void;
     onOpenLogs: () => void;
 }) {
     const selectedProgress = selectedProfile ? installProgress[selectedProfile.id] : undefined;
@@ -2979,19 +3169,7 @@ function HomePanel({
                     <h2>{selectedProfile?.name ?? 'Create your first installation'}</h2>
                     <p>{selectedProfile ? profileSubtitle(selectedProfile) : 'No launch target yet.'}</p>
                     {profiles.length > 0 && (
-                        <label className="launch-profile-select">
-                            Installation
-                            <select
-                                value={selectedProfile?.id ?? selectedProfileId}
-                                onChange={(event) => onSelectProfile(event.target.value)}
-                            >
-                                {profiles.map((profile) => (
-                                    <option key={profile.id} value={profile.id}>
-                                        {profile.name} - {profileSubtitle(profile)}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
+                        <p className="launch-note">Choose clients and servers from the installation cards below.</p>
                     )}
                 </div>
                 <div className="quick-actions">
@@ -3032,7 +3210,7 @@ function HomePanel({
                                     {javaBusy ? 'Installing Java' : `Install Java ${selectedJavaRuntime.requiredMajor}`}
                                 </button>
                             )}
-                            <button type="button" onClick={() => onOpenLibrary(selectedProfile)}>Settings</button>
+                            <button type="button" onClick={() => onOpenProfileSettings(selectedProfile)}>Settings</button>
                             <button type="button" onClick={() => onOpenBrowse(selectedProfile.id)}>Browse mods</button>
                             <button type="button" onClick={onOpenLogs}>Logs</button>
                             {selectedPlayReason && <p className="action-hint">{selectedPlayReason}</p>}
@@ -3055,23 +3233,11 @@ function HomePanel({
 
             <LocalServerQuickPanel
                 servers={localServers}
-                selectedServer={selectedLocalServer}
-                selectedServerId={selectedLocalServer?.id ?? selectedLocalServerId}
                 form={localServerForm}
                 minecraftVersions={minecraftVersions}
-                progressByServer={localServerProgress}
-                runStates={localServerRunStates}
                 actionKey={localServerActionKey}
-                onSelectServer={onSelectLocalServer}
                 onFormChange={onLocalServerFormChange}
                 onCreate={onCreateLocalServer}
-                onInstall={onInstallLocalServer}
-                onRepair={onRepairLocalServer}
-                onStart={onStartLocalServer}
-                onStop={onStopLocalServer}
-                onOpenFolder={onOpenLocalServerFolder}
-                onOpenSettings={onOpenLocalServerSettings}
-                onOpenTerminal={onOpenLocalServerTerminal}
             />
 
             {selectedProfile ? (
@@ -3088,230 +3254,132 @@ function HomePanel({
                 <EmptyState title="No profiles" action="Create an installation to start playing."/>
             )}
 
-            {profiles.length > 0 && (
-                <HomeInstallationsPanel
-                    profiles={profiles}
-                    selectedProfileId={selectedProfile?.id ?? selectedProfileId}
-                    installProgress={installProgress}
-                    profileJavaRuntimes={profileJavaRuntimes}
-                    launchStates={launchStates}
-                    onSelectProfile={onSelectProfile}
-                    onInstallProfile={onInstallProfile}
-                    onRepairProfile={onRepairProfile}
-                    onLaunchProfile={onLaunchProfile}
-                    onOpenLibrary={onOpenLibrary}
-                />
-            )}
+            <HomeInstallationsPanel
+                profiles={profiles}
+                selectedProfileId={selectedProfile?.id ?? selectedProfileId}
+                localServers={localServers}
+                selectedLocalServerId={selectedLocalServer?.id ?? selectedLocalServerId}
+                installProgress={installProgress}
+                localServerProgress={localServerProgress}
+                profileJavaRuntimes={profileJavaRuntimes}
+                launchStates={launchStates}
+                localServerRunStates={localServerRunStates}
+                localServerActionKey={localServerActionKey}
+                onSelectProfile={onSelectProfile}
+                onSelectLocalServer={onSelectLocalServer}
+                onInstallProfile={onInstallProfile}
+                onRepairProfile={onRepairProfile}
+                onLaunchProfile={onLaunchProfile}
+                onOpenProfileSettings={onOpenProfileSettings}
+                onInstallLocalServer={onInstallLocalServer}
+                onRepairLocalServer={onRepairLocalServer}
+                onStartLocalServer={onStartLocalServer}
+                onStopLocalServer={onStopLocalServer}
+                onOpenLocalServerFolder={onOpenLocalServerFolder}
+                onOpenLocalServerSettings={onOpenLocalServerSettings}
+                onOpenLocalServerTerminal={onOpenLocalServerTerminal}
+            />
         </section>
     );
 }
 
 function LocalServerQuickPanel({
     servers,
-    selectedServer,
-    selectedServerId,
     form,
     minecraftVersions,
-    progressByServer,
-    runStates,
     actionKey,
-    onSelectServer,
     onFormChange,
-    onCreate,
-    onInstall,
-    onRepair,
-    onStart,
-    onStop,
-    onOpenFolder,
-    onOpenSettings,
-    onOpenTerminal
+    onCreate
 }: {
     servers: domain.LocalServer[];
-    selectedServer?: domain.LocalServer;
-    selectedServerId: string;
     form: LocalServerForm;
     minecraftVersions: domain.VersionOption[];
-    progressByServer: Record<string, LocalServerProgress>;
-    runStates: Record<string, LocalServerRunState>;
     actionKey: string;
-    onSelectServer: (id: string) => void;
     onFormChange: (form: LocalServerForm) => void;
     onCreate: (event: FormEvent<HTMLFormElement>) => void;
-    onInstall: (id: string) => void;
-    onRepair: (id: string) => void;
-    onStart: (id: string) => void;
-    onStop: (id: string) => void;
-    onOpenFolder: (id: string) => void;
-    onOpenSettings: (id: string) => void;
-    onOpenTerminal: (id: string) => void;
 }) {
     const creating = actionKey === 'server:create';
-    const selectedProgress = selectedServer ? progressByServer[selectedServer.id] : undefined;
-    const selectedRun = selectedServer ? runStates[selectedServer.id] : undefined;
 
     return (
         <section className="dashboard-panel local-server-panel">
             <div className="panel-heading">
                 <div>
                     <p className="eyebrow">Local server</p>
-                    <h2>Quick vanilla server</h2>
+                    <h2>Create vanilla server</h2>
                 </div>
                 <span className="server-count">{servers.length} saved</span>
             </div>
-            <div className="local-server-layout">
-                <form className="local-server-form" onSubmit={onCreate}>
-                    <label>
-                        Server name
-                        <input
-                            value={form.name}
-                            onChange={(event) => onFormChange({...form, name: event.target.value})}
-                        />
-                    </label>
-                    <label>
-                        Minecraft version
-                        <select
-                            value={form.minecraftVersion}
-                            onChange={(event) => onFormChange({...form, minecraftVersion: event.target.value})}
-                            disabled={minecraftVersions.length === 0}
-                        >
-                            {minecraftVersions.map((version) => (
-                                <option key={version.id} value={version.id}>
-                                    {version.label}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    <label>
-                        Port
-                        <input
-                            type="number"
-                            min="1"
-                            max="65535"
-                            value={form.port}
-                            onChange={(event) => onFormChange({...form, port: Number(event.target.value)})}
-                        />
-                    </label>
-                    <label>
-                        Min memory MB
-                        <input
-                            type="number"
-                            min="512"
-                            step="256"
-                            value={form.minMB}
-                            onChange={(event) => onFormChange({...form, minMB: Number(event.target.value)})}
-                        />
-                    </label>
-                    <label>
-                        Max memory MB
-                        <input
-                            type="number"
-                            min="512"
-                            step="256"
-                            value={form.maxMB}
-                            onChange={(event) => onFormChange({...form, maxMB: Number(event.target.value)})}
-                        />
-                    </label>
-                    <label className="wide">
-                        Server directory
-                        <input
-                            value={form.serverDir}
-                            placeholder="Default local server directory"
-                            onChange={(event) => onFormChange({...form, serverDir: event.target.value})}
-                        />
-                    </label>
-                    <label className="eula-check wide">
-                        <input
-                            type="checkbox"
-                            checked={form.eulaAccepted}
-                            onChange={(event) => onFormChange({...form, eulaAccepted: event.target.checked})}
-                        />
-                        <span>I accept the Minecraft EULA for this local server.</span>
-                    </label>
-                    <div className="local-server-create wide">
-                        <button className="primary" type="submit" disabled={creating || !form.eulaAccepted}>
-                            {creating ? 'Creating server' : 'Create and install'}
-                        </button>
-                        {!form.eulaAccepted && <p>Required before writing eula.txt.</p>}
-                    </div>
-                </form>
-
-                <div className="local-server-list">
-                    {servers.length === 0 ? (
-                        <div className="local-server-empty">
-                            <strong>No local servers yet</strong>
-                            <p>Create one to download a vanilla server jar and start it with Java nogui.</p>
-                        </div>
-                    ) : (
-                        servers.map((server) => {
-                            const progress = progressByServer[server.id];
-                            const run = runStates[server.id];
-                            const active = server.id === selectedServerId;
-                            const installing = isLocalServerInstalling(server, progress);
-                            const repairing = server.install?.status === 'repairing';
-                            const running = run?.status === 'running' || run?.status === 'starting';
-                            const startReason = localServerStartDisabledReason(server, progress, run);
-                            const installVisible = shouldShowLocalServerInstallButton(server, progress);
-                            const repairVisible = shouldShowLocalServerRepairButton(server, progress);
-                            const busy = actionKey.startsWith(`${server.id}:`);
-                            const settingsDisabled = busy || server.install?.status !== 'installed';
-
-                            return (
-                                <article key={server.id} className={active ? 'local-server-row active' : 'local-server-row'}>
-                                    <button className="local-server-select" type="button" onClick={() => onSelectServer(server.id)}>
-                                        <strong>{server.name}</strong>
-                                        <span>{localServerSubtitle(server)}</span>
-                                        <small>{localServerStatusText(server, progress, run)}</small>
-                                    </button>
-                                    <div className="local-server-actions">
-                                        {installVisible && (
-                                            <button className="small" type="button" disabled={installing || busy} onClick={() => onInstall(server.id)}>
-                                                {installing ? 'Installing' : 'Install'}
-                                            </button>
-                                        )}
-                                        {repairVisible && (
-                                            <button className="small" type="button" disabled={installing || busy || running} onClick={() => onRepair(server.id)}>
-                                                {repairing ? 'Repairing' : 'Repair'}
-                                            </button>
-                                        )}
-                                        {running ? (
-                                            <button className="small danger" type="button" disabled={busy} onClick={() => onStop(server.id)}>
-                                                Stop
-                                            </button>
-                                        ) : (
-                                            <button className="small primary" type="button" disabled={!!startReason || busy} onClick={() => onStart(server.id)}>
-                                                Start
-                                            </button>
-                                        )}
-                                        <button className="small" type="button" disabled={busy} onClick={() => onOpenFolder(server.id)}>
-                                            Folder
-                                        </button>
-                                        <button className="small" type="button" disabled={settingsDisabled} onClick={() => onOpenSettings(server.id)}>
-                                            Settings
-                                        </button>
-                                        <button className="small" type="button" disabled={busy} onClick={() => onOpenTerminal(server.id)}>
-                                            Terminal
-                                        </button>
-                                    </div>
-                                    {active && (progress || run) && (
-                                        <div className="local-server-detail">
-                                            {progress && <ProgressBar progress={progress}/>}
-                                            {run && <p>{localServerRunStatusText(run)}</p>}
-                                            {startReason && <p>{startReason}</p>}
-                                        </div>
-                                    )}
-                                </article>
-                            );
-                        })
-                    )}
+            <form className="local-server-form" onSubmit={onCreate}>
+                <label>
+                    Server name
+                    <input
+                        value={form.name}
+                        onChange={(event) => onFormChange({...form, name: event.target.value})}
+                    />
+                </label>
+                <VersionPicker
+                    label="Minecraft version"
+                    value={form.minecraftVersion}
+                    versions={minecraftVersions}
+                    disabled={minecraftVersions.length === 0}
+                    onChange={(minecraftVersion) => onFormChange({...form, minecraftVersion})}
+                />
+                <label>
+                    Port
+                    <input
+                        type="number"
+                        min="1"
+                        max="65535"
+                        value={form.port}
+                        onChange={(event) => onFormChange({...form, port: Number(event.target.value)})}
+                    />
+                </label>
+                <label>
+                    Min memory MB
+                    <input
+                        type="number"
+                        min="512"
+                        step="256"
+                        value={form.minMB}
+                        onChange={(event) => onFormChange({...form, minMB: Number(event.target.value)})}
+                    />
+                </label>
+                <label>
+                    Max memory MB
+                    <input
+                        type="number"
+                        min="512"
+                        step="256"
+                        value={form.maxMB}
+                        onChange={(event) => onFormChange({...form, maxMB: Number(event.target.value)})}
+                    />
+                </label>
+                <label className="wide">
+                    Server directory
+                    <input
+                        value={form.serverDir}
+                        placeholder="Default local server directory"
+                        onChange={(event) => onFormChange({...form, serverDir: event.target.value})}
+                    />
+                </label>
+                <label className="eula-check wide">
+                    <input
+                        type="checkbox"
+                        checked={form.eulaAccepted}
+                        onChange={(event) => onFormChange({...form, eulaAccepted: event.target.checked})}
+                    />
+                    <span>I accept the Minecraft EULA for this local server.</span>
+                </label>
+                <div className="local-server-create wide">
+                    <button className="primary" type="submit" disabled={creating || !form.eulaAccepted}>
+                        {creating ? 'Creating server' : 'Create and install'}
+                    </button>
+                    {!form.eulaAccepted && <p>Required before writing eula.txt.</p>}
                 </div>
-            </div>
-            {selectedServer && (
-                <p className="local-server-footnote">
-                    Selected: {selectedServer.serverDir}
-                    {selectedProgress && ` / ${localServerProgressMessage(selectedProgress)}`}
-                    {selectedRun && ` / ${localServerRunStatusText(selectedRun)}`}
-                </p>
-            )}
+            </form>
+            <p className="local-server-footnote">
+                Created servers live in the Installations list with client profiles.
+            </p>
         </section>
     );
 }
@@ -3319,26 +3387,57 @@ function LocalServerQuickPanel({
 function HomeInstallationsPanel({
     profiles,
     selectedProfileId,
+    localServers,
+    selectedLocalServerId,
     installProgress,
+    localServerProgress,
     profileJavaRuntimes,
     launchStates,
+    localServerRunStates,
+    localServerActionKey,
     onSelectProfile,
+    onSelectLocalServer,
     onInstallProfile,
     onRepairProfile,
     onLaunchProfile,
-    onOpenLibrary
+    onOpenProfileSettings,
+    onInstallLocalServer,
+    onRepairLocalServer,
+    onStartLocalServer,
+    onStopLocalServer,
+    onOpenLocalServerFolder,
+    onOpenLocalServerSettings,
+    onOpenLocalServerTerminal
 }: {
     profiles: domain.Profile[];
     selectedProfileId: string;
+    localServers: domain.LocalServer[];
+    selectedLocalServerId: string;
     installProgress: Record<string, InstallProgress>;
+    localServerProgress: Record<string, LocalServerProgress>;
     profileJavaRuntimes: Record<string, domain.ProfileJavaRuntime>;
     launchStates: Record<string, LaunchState>;
+    localServerRunStates: Record<string, LocalServerRunState>;
+    localServerActionKey: string;
     onSelectProfile: (id: string) => void;
+    onSelectLocalServer: (id: string) => void;
     onInstallProfile: (id: string) => void;
     onRepairProfile: (id: string) => void;
     onLaunchProfile: (id: string) => void;
-    onOpenLibrary: (profile?: domain.Profile) => void;
+    onOpenProfileSettings: (profile: domain.Profile) => void;
+    onInstallLocalServer: (id: string) => void;
+    onRepairLocalServer: (id: string) => void;
+    onStartLocalServer: (id: string) => void;
+    onStopLocalServer: (id: string) => void;
+    onOpenLocalServerFolder: (id: string) => void;
+    onOpenLocalServerSettings: (server: domain.LocalServer) => void;
+    onOpenLocalServerTerminal: (id: string) => void;
 }) {
+    const [filter, setFilter] = useState<InstallationFilter>('all');
+    const visibleProfiles = filter === 'servers' ? [] : profiles;
+    const visibleServers = filter === 'clients' ? [] : localServers;
+    const totalCount = profiles.length + localServers.length;
+
     return (
         <section className="dashboard-panel installation-overview">
             <div className="panel-heading">
@@ -3346,9 +3445,32 @@ function HomeInstallationsPanel({
                     <p className="eyebrow">Installations</p>
                     <h2>Quick access</h2>
                 </div>
+                <div className="installation-filter" role="tablist" aria-label="Filter installations">
+                    <button className={filter === 'all' ? 'active' : ''} type="button" onClick={() => setFilter('all')}>
+                        All {totalCount}
+                    </button>
+                    <button className={filter === 'clients' ? 'active' : ''} type="button" onClick={() => setFilter('clients')}>
+                        Clients {profiles.length}
+                    </button>
+                    <button className={filter === 'servers' ? 'active' : ''} type="button" onClick={() => setFilter('servers')}>
+                        Servers {localServers.length}
+                    </button>
+                </div>
             </div>
             <div className="home-profile-list">
-                {profiles.map((profile) => {
+                {totalCount === 0 && (
+                    <div className="local-server-empty">
+                        <strong>No installations yet</strong>
+                        <p>Create a client profile or a local server to pin it here.</p>
+                    </div>
+                )}
+                {totalCount > 0 && visibleProfiles.length === 0 && visibleServers.length === 0 && (
+                    <div className="local-server-empty">
+                        <strong>No matches</strong>
+                        <p>Switch the filter to see other installation types.</p>
+                    </div>
+                )}
+                {visibleProfiles.map((profile) => {
                     const progress = installProgress[profile.id];
                     const launch = launchStates[profile.id];
                     const javaRuntime = profileJavaRuntimes[profile.id];
@@ -3361,7 +3483,10 @@ function HomeInstallationsPanel({
                     return (
                         <article key={profile.id} className={active ? 'home-profile-row active' : 'home-profile-row'}>
                             <div className="home-profile-info">
-                                <strong>{profile.name}</strong>
+                                <div className="installation-title">
+                                    <strong>{profile.name}</strong>
+                                    <span>Client</span>
+                                </div>
                                 <span>{profileSubtitle(profile)}</span>
                                 <small>
                                     {installStatusText(profile)}
@@ -3386,11 +3511,183 @@ function HomeInstallationsPanel({
                                 <button className="small primary" type="button" disabled={!!playReason} onClick={() => onLaunchProfile(profile.id)}>
                                     {launch?.status === 'running' || launch?.status === 'starting' ? 'Running' : 'Play'}
                                 </button>
-                                <button className="small" type="button" onClick={() => onOpenLibrary(profile)}>Settings</button>
+                                <button className="small" type="button" onClick={() => onOpenProfileSettings(profile)}>Settings</button>
                             </div>
                         </article>
                     );
                 })}
+                {visibleServers.map((server) => {
+                    const progress = localServerProgress[server.id];
+                    const run = localServerRunStates[server.id];
+                    const active = server.id === selectedLocalServerId;
+                    const installing = isLocalServerInstalling(server, progress);
+                    const repairing = server.install?.status === 'repairing';
+                    const running = run?.status === 'running' || run?.status === 'starting';
+                    const startReason = localServerStartDisabledReason(server, progress, run);
+                    const installVisible = shouldShowLocalServerInstallButton(server, progress);
+                    const repairVisible = shouldShowLocalServerRepairButton(server, progress);
+                    const busy = localServerActionKey.startsWith(`${server.id}:`);
+
+                    return (
+                        <article key={`server:${server.id}`} className={active ? 'home-profile-row active' : 'home-profile-row'}>
+                            <div className="home-profile-info">
+                                <div className="installation-title">
+                                    <strong>{server.name}</strong>
+                                    <span>Server</span>
+                                </div>
+                                <span>{localServerSubtitle(server)}</span>
+                                <small>{localServerStatusText(server, progress, run)}</small>
+                            </div>
+                            <div className="home-profile-actions">
+                                <button className="small" type="button" disabled={active} onClick={() => onSelectLocalServer(server.id)}>
+                                    {active ? 'Selected' : 'Select'}
+                                </button>
+                                {installVisible && (
+                                    <button className="small" type="button" disabled={installing || busy} onClick={() => onInstallLocalServer(server.id)}>
+                                        {installing ? 'Installing' : 'Install'}
+                                    </button>
+                                )}
+                                {repairVisible && (
+                                    <button className="small" type="button" disabled={installing || busy || running} onClick={() => onRepairLocalServer(server.id)}>
+                                        {repairing ? 'Repairing' : 'Repair'}
+                                    </button>
+                                )}
+                                {running ? (
+                                    <button className="small danger" type="button" disabled={busy} onClick={() => onStopLocalServer(server.id)}>
+                                        Stop
+                                    </button>
+                                ) : (
+                                    <button className="small primary" type="button" disabled={!!startReason || busy} onClick={() => onStartLocalServer(server.id)}>
+                                        Start
+                                    </button>
+                                )}
+                                <button className="small" type="button" disabled={busy} onClick={() => onOpenLocalServerFolder(server.id)}>
+                                    Folder
+                                </button>
+                                <button className="small" type="button" onClick={() => onOpenLocalServerSettings(server)}>
+                                    Settings
+                                </button>
+                                <button className="small" type="button" disabled={busy} onClick={() => onOpenLocalServerTerminal(server.id)}>
+                                    Terminal
+                                </button>
+                            </div>
+                            {(active || progress || run) && (
+                                <div className="local-server-detail">
+                                    {progress && <ProgressBar progress={progress}/>}
+                                    {run && <p>{localServerRunStatusText(run)}</p>}
+                                    {startReason && <p>{startReason}</p>}
+                                </div>
+                            )}
+                        </article>
+                    );
+                })}
+            </div>
+        </section>
+    );
+}
+
+function LocalServerDetail({
+    server,
+    progress,
+    run,
+    actionKey,
+    onInstall,
+    onRepair,
+    onStart,
+    onStop,
+    onOpenFolder,
+    onOpenSettings,
+    onOpenTerminal
+}: {
+    server?: domain.LocalServer;
+    progress?: LocalServerProgress;
+    run?: LocalServerRunState;
+    actionKey: string;
+    onInstall: (id: string) => void;
+    onRepair: (id: string) => void;
+    onStart: (id: string) => void;
+    onStop: (id: string) => void;
+    onOpenFolder: (id: string) => void;
+    onOpenSettings: (server: domain.LocalServer) => void;
+    onOpenTerminal: (id: string) => void;
+}) {
+    if (!server) {
+        return <EmptyState title="Select an installation" action="No client profile or server selected."/>;
+    }
+
+    const installing = isLocalServerInstalling(server, progress);
+    const repairing = server.install?.status === 'repairing';
+    const running = run?.status === 'running' || run?.status === 'starting';
+    const startReason = localServerStartDisabledReason(server, progress, run);
+    const installVisible = shouldShowLocalServerInstallButton(server, progress);
+    const repairVisible = shouldShowLocalServerRepairButton(server, progress);
+    const busy = actionKey.startsWith(`${server.id}:`);
+
+    return (
+        <section className="profile-detail">
+            <div>
+                <p className="eyebrow">Server</p>
+                <h2>{server.name}</h2>
+                <p>{localServerSubtitle(server)}</p>
+            </div>
+            <div className="install-status">
+                <div>
+                    <span>Server status</span>
+                    <strong>{localServerInstallStatusText(server)}</strong>
+                    {server.install?.lastError && <p>{server.install.lastError}</p>}
+                    {progress?.message && <p>{localServerProgressMessage(progress)}</p>}
+                    {run && <p>{localServerRunStatusText(run)}</p>}
+                </div>
+                <ProgressBar progress={progress}/>
+            </div>
+            <dl className="detail-grid compact">
+                <div>
+                    <dt>Minecraft</dt>
+                    <dd>{server.minecraftVersion}</dd>
+                </div>
+                <div>
+                    <dt>Port</dt>
+                    <dd>{server.port}</dd>
+                </div>
+                <div>
+                    <dt>Memory</dt>
+                    <dd>{server.memory.minMB} - {server.memory.maxMB} MB</dd>
+                </div>
+                <div>
+                    <dt>EULA</dt>
+                    <dd>{server.eulaAccepted ? 'Accepted' : 'Not accepted'}</dd>
+                </div>
+            </dl>
+            <div className="install-status">
+                <div>
+                    <span>Server directory</span>
+                    <p>{server.serverDir || 'Default local server directory'}</p>
+                </div>
+            </div>
+            <div className="actions">
+                {installVisible && (
+                    <button type="button" disabled={installing || busy} onClick={() => onInstall(server.id)}>
+                        {installing ? 'Installing' : 'Install'}
+                    </button>
+                )}
+                {repairVisible && (
+                    <button type="button" disabled={installing || busy || running} onClick={() => onRepair(server.id)}>
+                        {repairing ? 'Repairing' : 'Repair'}
+                    </button>
+                )}
+                {running ? (
+                    <button className="danger" type="button" disabled={busy} onClick={() => onStop(server.id)}>
+                        Stop
+                    </button>
+                ) : (
+                    <button className="primary" type="button" disabled={!!startReason || busy} onClick={() => onStart(server.id)}>
+                        Start
+                    </button>
+                )}
+                <button type="button" disabled={busy} onClick={() => onOpenFolder(server.id)}>Folder</button>
+                <button type="button" onClick={() => onOpenSettings(server)}>Settings</button>
+                <button type="button" disabled={busy} onClick={() => onOpenTerminal(server.id)}>Terminal</button>
+                {startReason && <p className="action-hint">{startReason}</p>}
             </div>
         </section>
     );
@@ -3531,18 +3828,78 @@ function ProfileDetail({
                 <button className="danger" type="button" onClick={() => onDelete(profile.id)}>Delete</button>
                 {playReason && <p className="action-hint">{playReason}</p>}
             </div>
-            {settingsOpen && settingsDraft && (
+        </section>
+    );
+}
+
+function ProfileSettingsDialog({
+    profile,
+    draft,
+    javaRuntime,
+    javaInstallProgress,
+    modList,
+    modrinthUpdatePlans,
+    modActionKey,
+    onClose,
+    onDraftChange,
+    onInstallJava,
+    onSave,
+    onRefreshMods,
+    onImportMod,
+    onExportModpack,
+    onOpenModsFolder,
+    onCheckModrinthUpdates,
+    onUpdateModrinthProject,
+    onUpdateModrinthFile,
+    onBrowseMod,
+    onToggleMod,
+    onBulkToggleMods,
+    onDeleteMod
+}: {
+    profile: domain.Profile;
+    draft: ProfileSettingsDraft;
+    javaRuntime?: domain.ProfileJavaRuntime;
+    javaInstallProgress: JavaInstallProgress | null;
+    modList?: domain.ModList;
+    modrinthUpdatePlans: domain.ModrinthUpdatePlan[];
+    modActionKey: string;
+    onClose: () => void;
+    onDraftChange: (draft: ProfileSettingsDraft) => void;
+    onInstallJava: (version: number) => void;
+    onSave: (event: FormEvent<HTMLFormElement>) => void;
+    onRefreshMods: (profileId: string) => void;
+    onImportMod: (profileId: string) => void;
+    onExportModpack: (profileId: string) => void;
+    onOpenModsFolder: (profileId: string) => void;
+    onCheckModrinthUpdates: (profileId: string) => void;
+    onUpdateModrinthProject: (profileId: string, projectId: string) => void;
+    onUpdateModrinthFile: (profileId: string, fileName: string) => void;
+    onBrowseMod: (profileId: string, projectId: string, query: string) => void;
+    onToggleMod: (profileId: string, fileName: string, enabled: boolean) => void;
+    onBulkToggleMods: (profileId: string, fileNames: string[], enabled: boolean) => void;
+    onDeleteMod: (profileId: string, fileName: string) => void;
+}) {
+    return (
+        <div className="modal-backdrop" role="presentation">
+            <section className="confirm-dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-settings-title">
+                <div className="settings-dialog-top">
+                    <div>
+                        <p className="eyebrow">Client settings</p>
+                        <h2 id="profile-settings-title">{profile.name}</h2>
+                    </div>
+                    <button type="button" onClick={onClose}>Close</button>
+                </div>
                 <ProfileSettingsPanel
                     profile={profile}
-                    draft={settingsDraft}
+                    draft={draft}
                     javaRuntime={javaRuntime}
                     javaInstallProgress={javaInstallProgress}
                     modList={modList}
                     modrinthUpdatePlans={modrinthUpdatePlans}
                     modActionKey={modActionKey}
-                    onDraftChange={onSettingsDraftChange}
+                    onDraftChange={onDraftChange}
                     onInstallJava={onInstallJava}
-                    onSave={onSaveSettings}
+                    onSave={onSave}
                     onRefreshMods={onRefreshMods}
                     onImportMod={onImportMod}
                     onExportModpack={onExportModpack}
@@ -3555,8 +3912,139 @@ function ProfileDetail({
                     onBulkToggleMods={onBulkToggleMods}
                     onDeleteMod={onDeleteMod}
                 />
-            )}
-        </section>
+            </section>
+        </div>
+    );
+}
+
+function LocalServerSettingsDialog({
+    server,
+    progress,
+    run,
+    actionKey,
+    onClose,
+    onInstall,
+    onRepair,
+    onStart,
+    onStop,
+    onOpenFolder,
+    onOpenRawSettings,
+    onOpenTerminal
+}: {
+    server: domain.LocalServer;
+    progress?: LocalServerProgress;
+    run?: LocalServerRunState;
+    actionKey: string;
+    onClose: () => void;
+    onInstall: (id: string) => void;
+    onRepair: (id: string) => void;
+    onStart: (id: string) => void;
+    onStop: (id: string) => void;
+    onOpenFolder: (id: string) => void;
+    onOpenRawSettings: (id: string) => void;
+    onOpenTerminal: (id: string) => void;
+}) {
+    const installing = isLocalServerInstalling(server, progress);
+    const repairing = server.install?.status === 'repairing';
+    const running = run?.status === 'running' || run?.status === 'starting';
+    const startReason = localServerStartDisabledReason(server, progress, run);
+    const installVisible = shouldShowLocalServerInstallButton(server, progress);
+    const repairVisible = shouldShowLocalServerRepairButton(server, progress);
+    const busy = actionKey.startsWith(`${server.id}:`);
+    const rawSettingsDisabled = busy || server.install?.status !== 'installed';
+
+    return (
+        <div className="modal-backdrop" role="presentation">
+            <section className="confirm-dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="server-settings-title">
+                <div className="settings-dialog-top">
+                    <div>
+                        <p className="eyebrow">Server settings</p>
+                        <h2 id="server-settings-title">{server.name}</h2>
+                    </div>
+                    <button type="button" onClick={onClose}>Close</button>
+                </div>
+                <div className="server-settings-panel">
+                    <div className="settings-section wide">
+                        <div>
+                            <p className="eyebrow">Basic</p>
+                            <h3>Runtime summary</h3>
+                        </div>
+                        <dl className="detail-grid settings-details">
+                            <div>
+                                <dt>Minecraft</dt>
+                                <dd>{server.minecraftVersion}</dd>
+                            </div>
+                            <div>
+                                <dt>Port</dt>
+                                <dd>{server.port}</dd>
+                            </div>
+                            <div>
+                                <dt>Memory</dt>
+                                <dd>{server.memory.minMB} - {server.memory.maxMB} MB</dd>
+                            </div>
+                            <div>
+                                <dt>EULA</dt>
+                                <dd>{server.eulaAccepted ? 'Accepted' : 'Not accepted'}</dd>
+                            </div>
+                            <div>
+                                <dt>Install status</dt>
+                                <dd>{localServerInstallStatusText(server)}</dd>
+                            </div>
+                            <div>
+                                <dt>Server ID</dt>
+                                <dd>{server.id}</dd>
+                            </div>
+                        </dl>
+                    </div>
+                    <label className="wide">
+                        Server directory
+                        <input value={server.serverDir} disabled readOnly/>
+                    </label>
+                    <div className="settings-section wide">
+                        <div>
+                            <p className="eyebrow">Advanced</p>
+                            <h3>server.properties</h3>
+                        </div>
+                        <p className="muted">
+                            Inline editing is next; for now this opens the raw settings file without losing unknown keys.
+                        </p>
+                    </div>
+                    {(progress || run || startReason) && (
+                        <div className="local-server-detail wide">
+                            {progress && <ProgressBar progress={progress}/>}
+                            {run && <p>{localServerRunStatusText(run)}</p>}
+                            {startReason && <p>{startReason}</p>}
+                        </div>
+                    )}
+                    <div className="settings-dialog-actions wide">
+                        {installVisible && (
+                            <button type="button" disabled={installing || busy} onClick={() => onInstall(server.id)}>
+                                {installing ? 'Installing' : 'Install'}
+                            </button>
+                        )}
+                        {repairVisible && (
+                            <button type="button" disabled={installing || busy || running} onClick={() => onRepair(server.id)}>
+                                {repairing ? 'Repairing' : 'Repair'}
+                            </button>
+                        )}
+                        {running ? (
+                            <button className="danger" type="button" disabled={busy} onClick={() => onStop(server.id)}>
+                                Stop
+                            </button>
+                        ) : (
+                            <button className="primary" type="button" disabled={!!startReason || busy} onClick={() => onStart(server.id)}>
+                                Start
+                            </button>
+                        )}
+                        <button type="button" disabled={busy} onClick={() => onOpenFolder(server.id)}>Folder</button>
+                        <button type="button" disabled={rawSettingsDisabled} onClick={() => onOpenRawSettings(server.id)}>
+                            Open raw settings file
+                        </button>
+                        <button type="button" disabled={busy} onClick={() => onOpenTerminal(server.id)}>Terminal</button>
+                    </div>
+                </div>
+            </section>
+        </div>
     );
 }
 
