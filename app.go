@@ -3,9 +3,16 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,13 +49,24 @@ type App struct {
 	modsService      *mods.Service
 	serverService    *servers.Service
 	running          map[string]*exec.Cmd
+	launchDone       map[string]chan struct{}
 	serverInputs     map[string]io.WriteCloser
 	stopping         map[string]bool
+	externalMu       sync.RWMutex
+	externalServer   *http.Server
+	externalBaseURL  string
+	externalToken    string
+	logsSnapshot     string
+	serverEvents     map[string][]domain.LocalServerEvent
 	startupErr       error
 	headless         bool
 }
 
-const maxModrinthDependencyDepth = 12
+const (
+	maxModrinthDependencyDepth      = 12
+	localServerStartupFailureWindow = 15 * time.Second
+	maxLocalServerTerminalEvents    = 1000
+)
 
 type modrinthInstallState struct {
 	seenProjects         map[string]bool
@@ -69,8 +87,10 @@ type modrinthInstallPlanState struct {
 func NewApp() *App {
 	return &App{
 		running:      make(map[string]*exec.Cmd),
+		launchDone:   make(map[string]chan struct{}),
 		serverInputs: make(map[string]io.WriteCloser),
 		stopping:     make(map[string]bool),
+		serverEvents: make(map[string][]domain.LocalServerEvent),
 	}
 }
 
@@ -96,6 +116,11 @@ func (a *App) initServices(ctx context.Context, dataDir string) {
 	a.modsService = mods.NewService()
 	a.serverService = servers.NewService(dataDir)
 	a.startupErr = nil
+}
+
+func (a *App) shutdown(ctx context.Context) {
+	a.stopRunningLocalServers(15 * time.Second)
+	a.shutdownExternalWindowServer(ctx)
 }
 
 func (a *App) AppInfo() domain.AppInfo {
@@ -212,6 +237,14 @@ func (a *App) CreateLocalServer(input domain.LocalServerInput) (domain.LocalServ
 }
 
 func (a *App) InstallLocalServer(id string) (domain.LocalServer, error) {
+	return a.installLocalServer(id, false)
+}
+
+func (a *App) RepairLocalServer(id string) (domain.LocalServer, error) {
+	return a.installLocalServer(id, true)
+}
+
+func (a *App) installLocalServer(id string, repair bool) (domain.LocalServer, error) {
 	if err := a.ensureReady(); err != nil {
 		return domain.LocalServer{}, err
 	}
@@ -221,10 +254,23 @@ func (a *App) InstallLocalServer(id string) (domain.LocalServer, error) {
 		return domain.LocalServer{}, err
 	}
 
+	status := "installing"
+	startMessage := "Installing local server"
+	progressMessage := "Starting local server install"
+	failMessage := "Local server install failed"
+	successMessage := "Local server ready"
+	if repair {
+		status = "repairing"
+		startMessage = "Checking and repairing local server"
+		progressMessage = "Starting local server repair"
+		failMessage = "Local server repair failed"
+		successMessage = "Local server repaired"
+	}
+
 	server, err = a.serverService.SetInstallState(id, domain.InstallState{
-		Status:      "installing",
+		Status:      status,
 		Installed:   false,
-		Message:     "Installing local server",
+		Message:     startMessage,
 		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
 		BaseVersion: server.MinecraftVersion,
 	})
@@ -235,13 +281,13 @@ func (a *App) InstallLocalServer(id string) (domain.LocalServer, error) {
 	a.emitLocalServerProgress(domain.LocalServerProgress{
 		ServerID: id,
 		Stage:    "start",
-		Message:  "Installing local server",
+		Message:  progressMessage,
 	})
 	if err := a.minecraftService.InstallVanillaServer(a.ctx, server, a.emitLocalServerProgress); err != nil {
 		failed, stateErr := a.serverService.SetInstallState(id, domain.InstallState{
 			Status:      "failed",
 			Installed:   false,
-			Message:     "Local server install failed",
+			Message:     failMessage,
 			UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
 			LastError:   err.Error(),
 			BaseVersion: server.MinecraftVersion,
@@ -249,7 +295,7 @@ func (a *App) InstallLocalServer(id string) (domain.LocalServer, error) {
 		a.emitLocalServerProgress(domain.LocalServerProgress{
 			ServerID: id,
 			Stage:    "failed",
-			Message:  "Local server install failed",
+			Message:  failMessage,
 			Done:     true,
 			Error:    err.Error(),
 		})
@@ -262,7 +308,7 @@ func (a *App) InstallLocalServer(id string) (domain.LocalServer, error) {
 	return a.serverService.SetInstallState(id, domain.InstallState{
 		Status:      "installed",
 		Installed:   true,
-		Message:     "Local server ready",
+		Message:     successMessage,
 		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
 		BaseVersion: server.MinecraftVersion,
 	})
@@ -725,6 +771,70 @@ func (a *App) OpenLocalServerFolder(id string) error {
 		wailsruntime.BrowserOpenURL(a.ctx, "file://"+server.ServerDir)
 		return nil
 	}
+}
+
+func (a *App) OpenLocalServerSettings(id string) error {
+	if err := a.ensureReady(); err != nil {
+		return err
+	}
+	server, err := a.serverService.Get(id)
+	if err != nil {
+		return err
+	}
+	propertiesPath := filepath.Join(server.ServerDir, "server.properties")
+	if _, err := os.Stat(propertiesPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("server.properties not found; install or repair the local server first")
+		}
+		return fmt.Errorf("open local server settings: %w", err)
+	}
+
+	switch stdruntime.GOOS {
+	case "darwin":
+		return exec.Command("open", propertiesPath).Start()
+	case "linux":
+		return exec.Command("xdg-open", propertiesPath).Start()
+	default:
+		wailsruntime.BrowserOpenURL(a.ctx, "file://"+propertiesPath)
+		return nil
+	}
+}
+
+func (a *App) OpenDetachedLogsWindow(snapshot string) error {
+	if err := a.ensureReady(); err != nil {
+		return err
+	}
+	if err := a.setLogsSnapshot(snapshot); err != nil {
+		return err
+	}
+	openURL, err := a.externalWindowURL("/logs")
+	if err != nil {
+		return err
+	}
+	wailsruntime.BrowserOpenURL(a.ctx, openURL)
+	return nil
+}
+
+func (a *App) SyncDetachedLogsWindow(snapshot string) error {
+	if err := a.ensureReady(); err != nil {
+		return err
+	}
+	return a.setLogsSnapshot(snapshot)
+}
+
+func (a *App) OpenLocalServerTerminal(id string) error {
+	if err := a.ensureReady(); err != nil {
+		return err
+	}
+	if _, err := a.serverService.Get(id); err != nil {
+		return err
+	}
+	openURL, err := a.externalWindowURL("/server-terminal/" + url.PathEscape(id))
+	if err != nil {
+		return err
+	}
+	wailsruntime.BrowserOpenURL(a.ctx, openURL)
+	return nil
 }
 
 func (a *App) SearchModrinthMods(profileID string, query string) (domain.ModrinthSearchResult, error) {
@@ -2111,6 +2221,15 @@ func (a *App) StartLocalServer(id string) (domain.LocalServerRunState, error) {
 	if !server.EulaAccepted {
 		return domain.LocalServerRunState{}, fmt.Errorf("minecraft EULA must be accepted before starting the server")
 	}
+	if err := ensureLocalServerPortAvailable(server); err != nil {
+		a.emitLocalServerEvent(domain.LocalServerEvent{
+			ServerID: id,
+			Status:   domain.LaunchFailed,
+			Message:  err.Error(),
+			Time:     time.Now().UTC().Format(time.RFC3339),
+		})
+		return domain.LocalServerRunState{}, err
+	}
 
 	currentSettings, err := a.settingsService.Get()
 	if err != nil {
@@ -2161,7 +2280,8 @@ func (a *App) StartLocalServer(id string) (domain.LocalServerRunState, error) {
 		return domain.LocalServerRunState{}, err
 	}
 
-	startedAt := time.Now().UTC().Format(time.RFC3339)
+	startedAtTime := time.Now().UTC()
+	startedAt := startedAtTime.Format(time.RFC3339)
 	if err := command.Start(); err != nil {
 		_ = stdin.Close()
 		a.emitLocalServerEvent(domain.LocalServerEvent{
@@ -2173,7 +2293,8 @@ func (a *App) StartLocalServer(id string) (domain.LocalServerRunState, error) {
 		return domain.LocalServerRunState{}, err
 	}
 
-	a.markLocalServerRunning(runningKey, command, stdin)
+	done := make(chan struct{})
+	a.markLocalServerRunning(runningKey, command, stdin, done)
 	reserved = false
 
 	a.emitLocalServerEvent(domain.LocalServerEvent{
@@ -2185,7 +2306,7 @@ func (a *App) StartLocalServer(id string) (domain.LocalServerRunState, error) {
 
 	go a.streamLocalServerOutput(id, "stdout", stdout)
 	go a.streamLocalServerOutput(id, "stderr", stderr)
-	go a.waitForLocalServer(id, runningKey, command)
+	go a.waitForLocalServer(id, runningKey, command, startedAtTime, done)
 
 	return domain.LocalServerRunState{
 		ServerID:  id,
@@ -2383,10 +2504,11 @@ func (a *App) markLaunchRunning(profileID string, command *exec.Cmd) {
 	a.running[profileID] = command
 }
 
-func (a *App) markLocalServerRunning(profileID string, command *exec.Cmd, stdin io.WriteCloser) {
+func (a *App) markLocalServerRunning(profileID string, command *exec.Cmd, stdin io.WriteCloser, done chan struct{}) {
 	a.launchMu.Lock()
 	defer a.launchMu.Unlock()
 	a.running[profileID] = command
+	a.launchDone[profileID] = done
 	if a.serverInputs == nil {
 		a.serverInputs = make(map[string]io.WriteCloser)
 	}
@@ -2437,6 +2559,7 @@ func (a *App) releaseLaunch(profileID string) {
 		_ = input.Close()
 	}
 	delete(a.running, profileID)
+	delete(a.launchDone, profileID)
 	delete(a.serverInputs, profileID)
 	delete(a.stopping, profileID)
 }
@@ -2529,19 +2652,15 @@ func (a *App) waitForLaunch(profileID string, command *exec.Cmd) {
 	})
 }
 
-func (a *App) waitForLocalServer(serverID string, runningKey string, command *exec.Cmd) {
+func (a *App) waitForLocalServer(serverID string, runningKey string, command *exec.Cmd, startedAt time.Time, done chan struct{}) {
+	defer close(done)
 	err := command.Wait()
 	exitCode := 0
 	if command.ProcessState != nil {
 		exitCode = command.ProcessState.ExitCode()
 	}
 	stopping := a.takeLaunchStopping(runningKey)
-	status := domain.LaunchStopped
-	message := "Local server process stopped"
-	if err != nil && !stopping {
-		status = domain.LaunchFailed
-		message = "Local server process failed: " + err.Error()
-	}
+	status, message := localServerExitStatus(err, stopping, time.Since(startedAt))
 
 	a.releaseLaunch(runningKey)
 
@@ -2554,6 +2673,19 @@ func (a *App) waitForLocalServer(serverID string, runningKey string, command *ex
 	})
 }
 
+func localServerExitStatus(err error, stopping bool, ranFor time.Duration) (domain.LaunchStatus, string) {
+	if stopping {
+		return domain.LaunchStopped, "Local server process stopped"
+	}
+	if err != nil {
+		return domain.LaunchFailed, "Local server process failed: " + err.Error()
+	}
+	if ranFor > 0 && ranFor < localServerStartupFailureWindow {
+		return domain.LaunchFailed, "Local server exited during startup"
+	}
+	return domain.LaunchStopped, "Local server process stopped"
+}
+
 func (a *App) emitLaunchEvent(event domain.LaunchEvent) {
 	if a.ctx == nil || a.headless {
 		return
@@ -2562,10 +2694,482 @@ func (a *App) emitLaunchEvent(event domain.LaunchEvent) {
 }
 
 func (a *App) emitLocalServerEvent(event domain.LocalServerEvent) {
+	a.recordLocalServerEvent(event)
 	if a.ctx == nil || a.headless {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, "server:event", event)
+}
+
+func (a *App) setLogsSnapshot(snapshot string) error {
+	snapshot = strings.TrimSpace(snapshot)
+	if snapshot == "" {
+		snapshot = `{"logs":[],"profiles":[],"localServers":[]}`
+	}
+	if !json.Valid([]byte(snapshot)) {
+		return fmt.Errorf("detached logs snapshot is not valid JSON")
+	}
+	a.externalMu.Lock()
+	a.logsSnapshot = snapshot
+	a.externalMu.Unlock()
+	return nil
+}
+
+func (a *App) externalWindowURL(path string) (string, error) {
+	if err := a.ensureExternalWindowServer(); err != nil {
+		return "", err
+	}
+	a.externalMu.RLock()
+	baseURL := a.externalBaseURL
+	token := a.externalToken
+	a.externalMu.RUnlock()
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return baseURL + path + separator + "token=" + url.QueryEscape(token), nil
+}
+
+func (a *App) ensureExternalWindowServer() error {
+	a.externalMu.Lock()
+	defer a.externalMu.Unlock()
+	if a.externalServer != nil && a.externalBaseURL != "" {
+		return nil
+	}
+
+	token, err := randomToken()
+	if err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("start external window server: %w", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/logs", a.handleDetachedLogsPage)
+	mux.HandleFunc("/server-terminal/", a.handleServerTerminalPage)
+	mux.HandleFunc("/api/logs", a.handleDetachedLogsAPI)
+	mux.HandleFunc("/api/server/", a.handleServerTerminalAPI)
+
+	server := &http.Server{Handler: mux}
+	a.externalServer = server
+	a.externalBaseURL = "http://" + listener.Addr().String()
+	a.externalToken = token
+	if a.logsSnapshot == "" {
+		a.logsSnapshot = `{"logs":[],"profiles":[],"localServers":[]}`
+	}
+
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintf(os.Stderr, "external window server stopped: %v\n", err)
+		}
+	}()
+	return nil
+}
+
+func (a *App) shutdownExternalWindowServer(ctx context.Context) {
+	a.externalMu.Lock()
+	server := a.externalServer
+	a.externalServer = nil
+	a.externalBaseURL = ""
+	a.externalToken = ""
+	a.externalMu.Unlock()
+	if server != nil {
+		shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}
+}
+
+func (a *App) externalRequestAllowed(r *http.Request) bool {
+	a.externalMu.RLock()
+	expected := a.externalToken
+	a.externalMu.RUnlock()
+	return expected != "" && r.URL.Query().Get("token") == expected
+}
+
+func (a *App) handleDetachedLogsPage(w http.ResponseWriter, r *http.Request) {
+	if !a.externalRequestAllowed(r) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	a.externalMu.RLock()
+	token := a.externalToken
+	a.externalMu.RUnlock()
+	writeHTML(w, detachedLogsPageHTML(token))
+}
+
+func (a *App) handleDetachedLogsAPI(w http.ResponseWriter, r *http.Request) {
+	if !a.externalRequestAllowed(r) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	a.externalMu.RLock()
+	snapshot := a.logsSnapshot
+	a.externalMu.RUnlock()
+	if snapshot == "" {
+		snapshot = `{"logs":[],"profiles":[],"localServers":[]}`
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = io.WriteString(w, snapshot)
+}
+
+func (a *App) handleServerTerminalPage(w http.ResponseWriter, r *http.Request) {
+	if !a.externalRequestAllowed(r) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	serverID, ok := terminalServerIDFromPath(r.URL.Path, "/server-terminal/")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	server, err := a.serverService.Get(serverID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	a.externalMu.RLock()
+	token := a.externalToken
+	a.externalMu.RUnlock()
+	writeHTML(w, serverTerminalPageHTML(token, server))
+}
+
+func (a *App) handleServerTerminalAPI(w http.ResponseWriter, r *http.Request) {
+	if !a.externalRequestAllowed(r) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	serverID, action, ok := terminalAPIPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	switch action {
+	case "history":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, map[string]any{"events": a.localServerEventHistory(serverID)})
+	case "command":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var payload struct {
+			Command string `json:"command"`
+		}
+		body := http.MaxBytesReader(w, r.Body, 16*1024)
+		defer body.Close()
+		if err := json.NewDecoder(body).Decode(&payload); err != nil {
+			http.Error(w, "invalid command payload", http.StatusBadRequest)
+			return
+		}
+		if err := a.sendLocalServerCommand(serverID, payload.Command); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "sent"})
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (a *App) recordLocalServerEvent(event domain.LocalServerEvent) {
+	if event.ServerID == "" {
+		return
+	}
+	a.externalMu.Lock()
+	defer a.externalMu.Unlock()
+	if a.serverEvents == nil {
+		a.serverEvents = make(map[string][]domain.LocalServerEvent)
+	}
+	events := append(a.serverEvents[event.ServerID], event)
+	if len(events) > maxLocalServerTerminalEvents {
+		events = append([]domain.LocalServerEvent(nil), events[len(events)-maxLocalServerTerminalEvents:]...)
+	}
+	a.serverEvents[event.ServerID] = events
+}
+
+func (a *App) localServerEventHistory(serverID string) []domain.LocalServerEvent {
+	a.externalMu.RLock()
+	defer a.externalMu.RUnlock()
+	events := a.serverEvents[serverID]
+	return append([]domain.LocalServerEvent(nil), events...)
+}
+
+func (a *App) sendLocalServerCommand(serverID string, command string) error {
+	command = strings.TrimSpace(strings.ReplaceAll(command, "\r", ""))
+	if strings.TrimSpace(command) == "" {
+		return fmt.Errorf("server command is empty")
+	}
+	runningKey := localServerRunningKey(serverID)
+	_, stdin, err := a.runningLocalServer(runningKey)
+	if err != nil {
+		return fmt.Errorf("local server is not running")
+	}
+	if stdin == nil {
+		return fmt.Errorf("local server console is not available")
+	}
+	stoppingCommand := strings.EqualFold(command, "stop")
+	if stoppingCommand {
+		a.markLaunchStopping(runningKey)
+	}
+	if _, err := io.WriteString(stdin, command+"\n"); err != nil {
+		if stoppingCommand {
+			_ = a.takeLaunchStopping(runningKey)
+		}
+		return fmt.Errorf("send local server command: %w", err)
+	}
+	a.emitLocalServerEvent(domain.LocalServerEvent{
+		ServerID: serverID,
+		Status:   domain.LaunchRunning,
+		Stream:   "stdin",
+		Message:  "> " + command,
+		Time:     time.Now().UTC().Format(time.RFC3339),
+	})
+	return nil
+}
+
+type runningLocalServerProcess struct {
+	runningKey string
+	command    *exec.Cmd
+	stdin      io.WriteCloser
+	done       <-chan struct{}
+}
+
+func (a *App) runningLocalServerProcesses() []runningLocalServerProcess {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
+	if a.stopping == nil {
+		a.stopping = make(map[string]bool)
+	}
+	processes := make([]runningLocalServerProcess, 0)
+	for runningKey, command := range a.running {
+		if !strings.HasPrefix(runningKey, "server:") || command == nil {
+			continue
+		}
+		processes = append(processes, runningLocalServerProcess{
+			runningKey: runningKey,
+			command:    command,
+			stdin:      a.serverInputs[runningKey],
+			done:       a.launchDone[runningKey],
+		})
+		a.stopping[runningKey] = true
+	}
+	return processes
+}
+
+func (a *App) stopRunningLocalServers(timeout time.Duration) {
+	processes := a.runningLocalServerProcesses()
+	if len(processes) == 0 {
+		return
+	}
+	for _, process := range processes {
+		if process.stdin != nil {
+			_, _ = io.WriteString(process.stdin, "stop\n")
+			_ = process.stdin.Close()
+			continue
+		}
+		if process.command.Process != nil {
+			_ = process.command.Process.Signal(os.Interrupt)
+		}
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for i, process := range processes {
+		if process.done == nil {
+			continue
+		}
+		select {
+		case <-process.done:
+			continue
+		case <-timer.C:
+			for _, remaining := range processes[i:] {
+				if remaining.command.Process != nil {
+					_ = remaining.command.Process.Kill()
+				}
+			}
+			return
+		}
+	}
+}
+
+func ensureLocalServerPortAvailable(server domain.LocalServer) error {
+	if server.Port <= 0 {
+		return nil
+	}
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", server.Port))
+	if err != nil {
+		return fmt.Errorf("local server port %d is already in use; stop the other server or choose another port", server.Port)
+	}
+	return listener.Close()
+}
+
+func terminalServerIDFromPath(path string, prefix string) (string, bool) {
+	if !strings.HasPrefix(path, prefix) {
+		return "", false
+	}
+	rawID := strings.TrimPrefix(path, prefix)
+	if rawID == "" || strings.Contains(rawID, "/") {
+		return "", false
+	}
+	serverID, err := url.PathUnescape(rawID)
+	if err != nil || serverID == "" {
+		return "", false
+	}
+	return serverID, true
+}
+
+func terminalAPIPath(path string) (string, string, bool) {
+	const prefix = "/api/server/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	serverID, err := url.PathUnescape(parts[0])
+	if err != nil || serverID == "" {
+		return "", "", false
+	}
+	return serverID, parts[1], true
+}
+
+func writeHTML(w http.ResponseWriter, content string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = io.WriteString(w, content)
+}
+
+func writeJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func randomToken() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("create external window token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func jsonString(value string) string {
+	b, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(b)
+}
+
+func detachedLogsPageHTML(token string) string {
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Power Mine Logs</title>
+<style>
+:root{color-scheme:dark;--bg:#050505;--panel:#121212;--surface:#0d0d0d;--text:#fff;--muted:rgb(255 255 255 / 70%);--border:#fff;--ok:#4ade80;--error:#f87171;font-family:"SFMono-Regular","Cascadia Code","Liberation Mono",Menlo,Consolas,monospace}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}header{position:sticky;top:0;z-index:1;border-bottom:2px solid var(--border);background:var(--panel);padding:16px 18px;display:flex;align-items:flex-end;justify-content:space-between;gap:18px}h1,p{margin:0}.eyebrow{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}h1{margin-top:6px;font-size:28px;letter-spacing:-.04em}.meta{color:var(--muted);font-size:12px;text-align:right}.feed{display:grid;gap:8px;padding:14px}.row{display:grid;grid-template-columns:86px 72px 150px 190px minmax(0,1fr);gap:10px;border:1px solid rgb(255 255 255 / 32%);background:var(--surface);padding:9px 10px}.row.success .level{color:var(--ok)}.row.error{border-color:var(--error);background:#1a0d0d}.row.error .level{color:var(--error)}.time,.source,.target{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.level{font-weight:800;text-transform:uppercase}.message{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}.empty{border:2px dashed rgb(255 255 255 / 40%);padding:24px;color:var(--muted)}@media(max-width:820px){header{display:block}.meta{text-align:left;margin-top:10px}.row{grid-template-columns:1fr}.time,.source,.target{white-space:normal}}
+</style>
+</head>
+<body>
+<header><div><p class="eyebrow">Power Mine</p><h1>Detached logs</h1></div><p class="meta" id="meta">Loading...</p></header>
+<main class="feed" id="feed"><p class="empty">Waiting for launcher logs.</p></main>
+<script>
+const token = ` + jsonString(token) + `;
+const feed = document.getElementById('feed');
+const meta = document.getElementById('meta');
+function esc(value){return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
+function render(data){
+  const logs = Array.isArray(data.logs) ? data.logs : [];
+  meta.innerHTML = esc(logs.length) + ' events<br/>Updated ' + esc(new Date().toLocaleTimeString());
+  if (logs.length === 0) { feed.innerHTML = '<p class="empty">No launcher events yet.</p>'; return; }
+  feed.innerHTML = logs.slice(0, 1000).map(log => '<article class="row '+esc(log.level)+'"><span class="time">'+esc(log.time)+'</span><span class="level">'+esc(log.level)+'</span><span class="source" title="'+esc(log.source)+'">'+esc(log.source)+'</span><span class="target" title="'+esc(log.target)+'">'+esc(log.target)+'</span><span class="message">'+esc(log.message)+'</span></article>').join('');
+}
+async function refresh(){
+  try {
+    const response = await fetch('/api/logs?token=' + encodeURIComponent(token), {cache:'no-store'});
+    if (!response.ok) throw new Error(await response.text());
+    render(await response.json());
+  } catch (error) {
+    meta.textContent = 'Update failed';
+    feed.innerHTML = '<p class="empty">' + esc(error.message || error) + '</p>';
+  }
+}
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>`
+}
+
+func serverTerminalPageHTML(token string, server domain.LocalServer) string {
+	serverID := url.PathEscape(server.ID)
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Power Mine Terminal - ` + html.EscapeString(server.Name) + `</title>
+<style>
+:root{color-scheme:dark;--bg:#020202;--panel:#101010;--ink:#f8f8f8;--muted:rgb(248 248 248 / 66%);--line:rgb(248 248 248 / 24%);--green:#7cff9b;--red:#ff7777;--blue:#77d7ff;font-family:"SFMono-Regular","Cascadia Code","Liberation Mono",Menlo,Consolas,monospace}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 20% 0%,#1d2b1f 0,#020202 34rem);color:var(--ink);display:grid;grid-template-rows:auto 1fr auto}header{border-bottom:1px solid var(--line);background:rgb(0 0 0 / 76%);padding:14px 16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}h1,p{margin:0}.eyebrow{color:var(--green);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}h1{margin-top:4px;font-size:23px}.meta{text-align:right;color:var(--muted);font-size:12px}.terminal{padding:14px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.line{display:grid;grid-template-columns:82px 78px 72px minmax(0,1fr);gap:10px;padding:3px 0;border-bottom:1px solid rgb(255 255 255 / 4%)}.time,.stream,.status{color:var(--muted)}.stream.stdin{color:var(--blue)}.status.failed,.line.failed .msg{color:var(--red)}.status.running{color:var(--green)}.composer{border-top:1px solid var(--line);background:var(--panel);padding:12px 14px;display:flex;gap:10px}.prompt{color:var(--green);font-weight:800;padding-top:10px}input{flex:1;background:#050505;border:1px solid var(--line);color:var(--ink);font:inherit;padding:10px 12px}button{background:var(--green);border:0;color:#041007;font:inherit;font-weight:900;padding:10px 14px;cursor:pointer}.hint{color:var(--muted);font-size:12px;margin-top:4px}@media(max-width:760px){header{display:block}.meta{text-align:left;margin-top:8px}.line{grid-template-columns:1fr}.composer{align-items:stretch}.prompt{display:none}}
+</style>
+</head>
+<body>
+<header><div><p class="eyebrow">Power Mine server terminal</p><h1>` + html.EscapeString(server.Name) + `</h1><p class="hint">Type Minecraft server commands without a slash, for example: say Hello or stop.</p></div><p class="meta">` + html.EscapeString(server.MinecraftVersion) + `<br/>Port ` + fmt.Sprintf("%d", server.Port) + `</p></header>
+<main class="terminal" id="terminal"><p class="hint">Loading terminal history...</p></main>
+<form class="composer" id="composer"><span class="prompt">&gt;</span><input id="command" autocomplete="off" spellcheck="false" placeholder="server command"/><button type="submit">Send</button></form>
+<script>
+const token = ` + jsonString(token) + `;
+const serverID = ` + jsonString(serverID) + `;
+const terminal = document.getElementById('terminal');
+const form = document.getElementById('composer');
+const commandInput = document.getElementById('command');
+let lastRendered = '';
+function esc(value){return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
+function lineKey(event){return [event.time,event.stream,event.status,event.message,event.exitCode].join('|');}
+function render(events){
+  const key = events.map(lineKey).join('\n');
+  if (key === lastRendered) return;
+  const stick = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 24;
+  lastRendered = key;
+  terminal.innerHTML = events.length ? events.map(event => '<div class="line '+esc(event.status)+'"><span class="time">'+esc((event.time || '').slice(11,19))+'</span><span class="status '+esc(event.status)+'">'+esc(event.status || '')+'</span><span class="stream '+esc(event.stream)+'">'+esc(event.stream || 'event')+'</span><span class="msg">'+esc(event.message || '')+(event.exitCode !== undefined ? ' (exit '+esc(event.exitCode)+')' : '')+'</span></div>').join('') : '<p class="hint">No server output yet. Start the server from Power Mine, then keep this window open.</p>';
+  if (stick) terminal.scrollTop = terminal.scrollHeight;
+}
+async function refresh(){
+  try {
+    const response = await fetch('/api/server/' + serverID + '/history?token=' + encodeURIComponent(token), {cache:'no-store'});
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    render(Array.isArray(data.events) ? data.events : []);
+  } catch (error) {
+    terminal.innerHTML = '<p class="hint">' + esc(error.message || error) + '</p>';
+  }
+}
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  const command = commandInput.value.trim();
+  if (!command) return;
+  commandInput.value = '';
+  try {
+    const response = await fetch('/api/server/' + serverID + '/command?token=' + encodeURIComponent(token), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command})});
+    if (!response.ok) throw new Error(await response.text());
+    refresh();
+  } catch (error) {
+    alert(error.message || error);
+  }
+});
+refresh();
+setInterval(refresh, 750);
+commandInput.focus();
+</script>
+</body>
+</html>`
 }
 
 func localServerRunningKey(id string) string {

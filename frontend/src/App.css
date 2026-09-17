@@ -1373,52 +1373,6 @@ button.small {
     background: rgb(0 0 0 / 58%);
 }
 
-.logs-window-backdrop {
-    align-items: stretch;
-    justify-items: stretch;
-}
-
-.logs-window {
-    width: min(1280px, 100%);
-    max-height: calc(100vh - 48px);
-    margin: auto;
-    border: 1px solid #3d4738;
-    border-radius: 10px;
-    background: #11150f;
-    box-shadow: 0 18px 58px rgb(0 0 0 / 55%);
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-}
-
-.logs-window-header {
-    border-bottom: 1px solid #30382d;
-    padding: 16px 18px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-}
-
-.logs-window-header h2 {
-    margin: 0;
-    font-size: 24px;
-}
-
-.logs-window .classic-logs {
-    min-height: 0;
-    flex: 1;
-    padding: 16px;
-}
-
-.logs-window .logs-sidebar {
-    max-height: none;
-}
-
-.logs-window .logs-console {
-    min-height: 0;
-}
-
 .confirm-dialog {
     width: min(560px, 100%);
     max-height: calc(100vh - 48px);
@@ -1845,14 +1799,6 @@ input:disabled {
         flex-direction: column;
     }
 
-    .logs-window-backdrop {
-        padding: 10px;
-    }
-
-    .logs-window .classic-logs {
-        padding: 10px;
-    }
-
     .logs-actions {
         justify-content: flex-start;
     }
@@ -2246,6 +2192,9 @@ input:disabled {
 }
 
 .home-profile-row,
+.local-server-empty,
+.local-server-form,
+.local-server-row,
 .install-status,
 .log-row,
 .game-log-meta,
@@ -2269,6 +2218,7 @@ input:disabled {
 
 .profile-row.active,
 .home-profile-row.active,
+.local-server-row.active,
 .logs-mode-switch button.active,
 .log-source.active,
 .browse-version-row.current {
@@ -2351,6 +2301,18 @@ select {
     color: var(--pc-text);
 }
 
+select option,
+select optgroup {
+    background: var(--pc-bg);
+    color: var(--pc-text);
+}
+
+input:disabled,
+select:disabled {
+    color: var(--pc-text-muted);
+    opacity: 0.72;
+}
+
 input:focus,
 select:focus {
     outline: 2px solid var(--pc-border);
@@ -2361,6 +2323,7 @@ label,
 .launch-profile-select,
 .logs-toolbar label,
 .browse-profile-picker,
+.local-server-form label,
 .profile-settings-panel label,
 .form-grid label {
     color: var(--pc-text);
@@ -2448,6 +2411,126 @@ label,
     background: var(--pc-bg);
     color: var(--pc-text);
     font-family: var(--pm-mono);
+}
+
+.create-layout,
+.home-grid {
+    display: grid;
+    gap: 18px;
+    min-width: 0;
+}
+
+.library-server-panel {
+    grid-column: 1 / -1;
+    min-width: 0;
+}
+
+.form-grid,
+.form-grid > *,
+.profile-settings-panel,
+.profile-settings-panel > *,
+.settings-status > div,
+.catalog-status > div,
+.import-progress > div,
+.install-status > div,
+.browse-controls,
+.local-server-layout,
+.local-server-form,
+.local-server-list,
+.local-server-row,
+.home-profile-row,
+.home-profile-info {
+    min-width: 0;
+}
+
+.settings-status strong,
+.settings-status p,
+.catalog-status strong,
+.catalog-status p,
+.import-progress strong,
+.import-progress p,
+.install-status strong,
+.install-status p {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+.install-status p {
+    max-height: 4.8em;
+    overflow: auto;
+}
+
+.install-status strong,
+.home-profile-info small,
+.local-server-select small,
+.local-server-footnote {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.home-profile-row {
+    grid-template-columns: minmax(0, 1fr) minmax(180px, max-content);
+}
+
+.local-server-row {
+    grid-template-columns: minmax(0, 1fr) minmax(170px, max-content);
+}
+
+.profile-settings-header {
+    flex-wrap: wrap;
+}
+
+.home-profile-actions,
+.local-server-actions {
+    min-width: 0;
+    max-width: 430px;
+}
+
+.local-server-select,
+.local-server-select:hover:not(:disabled) {
+    min-height: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--pc-text);
+    padding: 0;
+    transform: none;
+}
+
+.log-panel.compact .log-list {
+    max-height: 260px;
+}
+
+.log-panel.compact .log-row {
+    grid-template-columns: 78px minmax(0, 1fr);
+    gap: 5px 10px;
+}
+
+.log-panel.compact .log-row strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.log-panel.compact .log-row p {
+    grid-column: 1 / -1;
+    max-height: 3.2em;
+    overflow: hidden;
+}
+
+@media (max-width: 1180px) {
+    .home-secondary,
+    .local-server-layout,
+    .home-profile-row {
+        grid-template-columns: 1fr;
+    }
+
+    .home-profile-actions,
+    .local-server-actions {
+        justify-content: flex-start;
+        max-width: none;
+    }
 }
 
 .modal-backdrop {

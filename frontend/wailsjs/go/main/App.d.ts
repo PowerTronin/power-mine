@@ -72,7 +72,13 @@ export function ListProfiles():Promise<domain.ProfileList>;
 
 export function ListQuiltLoaderVersions():Promise<Array<domain.VersionOption>>;
 
+export function OpenDetachedLogsWindow(arg1:string):Promise<void>;
+
 export function OpenLocalServerFolder(arg1:string):Promise<void>;
+
+export function OpenLocalServerSettings(arg1:string):Promise<void>;
+
+export function OpenLocalServerTerminal(arg1:string):Promise<void>;
 
 export function OpenProfileLogsFolder(arg1:string):Promise<void>;
 
@@ -94,6 +100,8 @@ export function ReadProfileGameLog(arg1:string,arg2:string):Promise<domain.GameL
 
 export function RefreshVersionCatalog():Promise<domain.VersionCatalog>;
 
+export function RepairLocalServer(arg1:string):Promise<domain.LocalServer>;
+
 export function RepairProfile(arg1:string):Promise<domain.Profile>;
 
 export function SaveAccount(arg1:domain.AccountConfig):Promise<domain.AccountConfig>;
@@ -109,6 +117,8 @@ export function SetProfileModEnabled(arg1:string,arg2:string,arg3:boolean):Promi
 export function StartLocalServer(arg1:string):Promise<domain.LocalServerRunState>;
 
 export function StopLocalServer(arg1:string):Promise<domain.LocalServerRunState>;
+
+export function SyncDetachedLogsWindow(arg1:string):Promise<void>;
 
 export function UpdateModrinthModFile(arg1:string,arg2:string,arg3:Array<string>):Promise<domain.ModrinthUpdateResult>;
 

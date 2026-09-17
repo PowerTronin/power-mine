@@ -142,8 +142,20 @@ export function ListQuiltLoaderVersions() {
   return window['go']['main']['App']['ListQuiltLoaderVersions']();
 }
 
+export function OpenDetachedLogsWindow(arg1) {
+  return window['go']['main']['App']['OpenDetachedLogsWindow'](arg1);
+}
+
 export function OpenLocalServerFolder(arg1) {
   return window['go']['main']['App']['OpenLocalServerFolder'](arg1);
+}
+
+export function OpenLocalServerSettings(arg1) {
+  return window['go']['main']['App']['OpenLocalServerSettings'](arg1);
+}
+
+export function OpenLocalServerTerminal(arg1) {
+  return window['go']['main']['App']['OpenLocalServerTerminal'](arg1);
 }
 
 export function OpenProfileLogsFolder(arg1) {
@@ -186,6 +198,10 @@ export function RefreshVersionCatalog() {
   return window['go']['main']['App']['RefreshVersionCatalog']();
 }
 
+export function RepairLocalServer(arg1) {
+  return window['go']['main']['App']['RepairLocalServer'](arg1);
+}
+
 export function RepairProfile(arg1) {
   return window['go']['main']['App']['RepairProfile'](arg1);
 }
@@ -216,6 +232,10 @@ export function StartLocalServer(arg1) {
 
 export function StopLocalServer(arg1) {
   return window['go']['main']['App']['StopLocalServer'](arg1);
+}
+
+export function SyncDetachedLogsWindow(arg1) {
+  return window['go']['main']['App']['SyncDetachedLogsWindow'](arg1);
 }
 
 export function UpdateModrinthModFile(arg1, arg2, arg3) {

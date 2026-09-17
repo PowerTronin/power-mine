@@ -29,7 +29,10 @@ import {
     ListProfileMods,
     ListProfiles,
     ListLocalServers,
+    OpenDetachedLogsWindow,
     OpenLocalServerFolder,
+    OpenLocalServerSettings,
+    OpenLocalServerTerminal,
     OpenProfileModsFolder,
     OpenProfileLogsFolder,
     PlanModrinthInstall,
@@ -40,6 +43,7 @@ import {
     PlanModrinthUpdateFile,
     ReadProfileGameLog,
     RefreshVersionCatalog,
+    RepairLocalServer,
     RepairProfile,
     SaveAccount,
     SaveSettings,
@@ -48,6 +52,7 @@ import {
     SetProfileModEnabled,
     StartLocalServer,
     StopLocalServer,
+    SyncDetachedLogsWindow,
     UpdateModrinthModFile,
     UpdateModrinthModFiles,
     UpdateModrinthModVersionFiles,
@@ -243,7 +248,7 @@ function App() {
     const [profileSettingsDraft, setProfileSettingsDraft] = useState<ProfileSettingsDraft | null>(null);
     const [modActionKey, setModActionKey] = useState('');
     const [gameLogActionKey, setGameLogActionKey] = useState('');
-    const [logsWindowOpen, setLogsWindowOpen] = useState(false);
+    const [detachedLogsActive, setDetachedLogsActive] = useState(false);
     const [browseProfileId, setBrowseProfileId] = useState('');
     const [browseQuery, setBrowseQuery] = useState('');
     const [browseResults, setBrowseResults] = useState<domain.ModrinthSearchResult | null>(null);
@@ -458,6 +463,20 @@ function App() {
         });
     }, []);
 
+    useEffect(() => {
+        if (!detachedLogsActive) {
+            return;
+        }
+        void SyncDetachedLogsWindow(detachedLogsSnapshot(launcherLogs, profiles, localServers)).catch((err) => {
+            appendLog({
+                level: 'error',
+                source: 'Logs',
+                message: `Detached logs sync failed: ${errorText(err)}`,
+            });
+            setDetachedLogsActive(false);
+        });
+    }, [detachedLogsActive, launcherLogs, profiles, localServers]);
+
     function appendLog(entry: Omit<LauncherLog, 'id' | 'time'>) {
         const next: LauncherLog = {
             ...entry,
@@ -465,6 +484,27 @@ function App() {
             time: new Date().toLocaleTimeString(),
         };
         setLauncherLogs((current) => [next, ...current]);
+    }
+
+    async function openDetachedLogsWindow() {
+        try {
+            setError('');
+            await OpenDetachedLogsWindow(detachedLogsSnapshot(launcherLogs, profiles, localServers));
+            setDetachedLogsActive(true);
+            appendLog({
+                level: 'success',
+                source: 'Logs',
+                message: 'Detached logs window opened.',
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Logs',
+                message: `Detached logs window failed: ${text}`,
+            });
+        }
     }
 
     async function refreshApp() {
@@ -873,8 +913,11 @@ function App() {
         }
     }
 
-    async function installLocalServer(id: string) {
-        const action = `${id}:install`;
+    async function installLocalServer(id: string, repair = false) {
+        const action = `${id}:${repair ? 'repair' : 'install'}`;
+        const status = repair ? 'repairing' : 'installing';
+        const progressMessage = repair ? 'Repairing local server' : 'Installing local server';
+        const successMessage = repair ? 'Local server repaired' : 'Local server ready';
         try {
             setError('');
             setMessage('');
@@ -884,26 +927,38 @@ function App() {
                     ...server,
                     install: {
                         ...server.install,
-                        status: 'installing',
-                        message: 'Installing local server',
+                        status,
+                        message: progressMessage,
                     },
                 })
                 : server
             ));
             appendLog({
                 level: 'info',
-                source: 'Server install',
-                message: 'Local server install requested.',
+                source: repair ? 'Server repair' : 'Server install',
+                message: repair ? 'Local server repair requested.' : 'Local server install requested.',
                 serverId: id,
             });
-            const server = await InstallLocalServer(id);
+            const server = repair ? await RepairLocalServer(id) : await InstallLocalServer(id);
             setLocalServers((current) => replaceLocalServer(current, server));
+            setLocalServerProgress((current) => ({
+                ...current,
+                [id]: {
+                    serverId: id,
+                    stage: 'complete',
+                    message: server.install?.message || successMessage,
+                    current: 1,
+                    total: 1,
+                    percent: 100,
+                    done: true,
+                },
+            }));
             setSelectedLocalServerId(server.id);
-            setMessage(server.install?.message || 'Local server ready.');
+            setMessage(server.install?.message || `${successMessage}.`);
             appendLog({
                 level: server.install?.status === 'failed' ? 'error' : 'success',
-                source: 'Server install',
-                message: server.install?.message || 'Local server ready.',
+                source: repair ? 'Server repair' : 'Server install',
+                message: server.install?.message || `${successMessage}.`,
                 serverId: id,
             });
             return server;
@@ -912,8 +967,8 @@ function App() {
             setError(text);
             appendLog({
                 level: 'error',
-                source: 'Server install',
-                message: `Local server install failed: ${text}`,
+                source: repair ? 'Server repair' : 'Server install',
+                message: `${repair ? 'Local server repair' : 'Local server install'} failed: ${text}`,
                 serverId: id,
             });
             await refreshLocalServers();
@@ -921,6 +976,10 @@ function App() {
         } finally {
             setLocalServerActionKey((current) => current === action ? '' : current);
         }
+    }
+
+    async function repairLocalServer(id: string) {
+        return installLocalServer(id, true);
     }
 
     async function startLocalServer(id: string) {
@@ -1019,6 +1078,56 @@ function App() {
                 level: 'error',
                 source: 'Server',
                 message: `Open local server folder failed: ${text}`,
+                serverId: id,
+            });
+        } finally {
+            setLocalServerActionKey('');
+        }
+    }
+
+    async function openLocalServerSettings(id: string) {
+        try {
+            setError('');
+            setLocalServerActionKey(`${id}:settings`);
+            await OpenLocalServerSettings(id);
+            appendLog({
+                level: 'info',
+                source: 'Server settings',
+                message: 'Local server settings opened.',
+                serverId: id,
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Server settings',
+                message: `Open local server settings failed: ${text}`,
+                serverId: id,
+            });
+        } finally {
+            setLocalServerActionKey('');
+        }
+    }
+
+    async function openLocalServerTerminal(id: string) {
+        try {
+            setError('');
+            setLocalServerActionKey(`${id}:terminal`);
+            await OpenLocalServerTerminal(id);
+            appendLog({
+                level: 'success',
+                source: 'Server terminal',
+                message: 'Local server terminal opened.',
+                serverId: id,
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            appendLog({
+                level: 'error',
+                source: 'Server terminal',
+                message: `Open local server terminal failed: ${text}`,
                 serverId: id,
             });
         } finally {
@@ -2241,6 +2350,31 @@ function App() {
         }
     }
 
+    function renderLocalServerPanel() {
+        return (
+            <LocalServerQuickPanel
+                servers={localServers}
+                selectedServer={selectedLocalServer}
+                selectedServerId={selectedLocalServer?.id ?? selectedLocalServerId}
+                form={localServerForm}
+                minecraftVersions={minecraftVersions}
+                progressByServer={localServerProgress}
+                runStates={localServerRunStates}
+                actionKey={localServerActionKey}
+                onSelectServer={setSelectedLocalServerId}
+                onFormChange={setLocalServerForm}
+                onCreate={createLocalServer}
+                onInstall={installLocalServer}
+                onRepair={repairLocalServer}
+                onStart={startLocalServer}
+                onStop={stopLocalServer}
+                onOpenFolder={openLocalServerFolder}
+                onOpenSettings={openLocalServerSettings}
+                onOpenTerminal={openLocalServerTerminal}
+            />
+        );
+    }
+
     return (
         <div className="app-shell">
             <aside className="rail">
@@ -2336,9 +2470,12 @@ function App() {
                         onLocalServerFormChange={setLocalServerForm}
                         onCreateLocalServer={createLocalServer}
                         onInstallLocalServer={installLocalServer}
+                        onRepairLocalServer={repairLocalServer}
                         onStartLocalServer={startLocalServer}
                         onStopLocalServer={stopLocalServer}
                         onOpenLocalServerFolder={openLocalServerFolder}
+                        onOpenLocalServerSettings={openLocalServerSettings}
+                        onOpenLocalServerTerminal={openLocalServerTerminal}
                         onInstallProfile={installProfile}
                         onRepairProfile={repairProfile}
                         onInstallJava={installJava}
@@ -2407,10 +2544,14 @@ function App() {
                             onBulkToggleMods={bulkToggleProfileMods}
                             onDeleteMod={removeProfileMod}
                         />
+                        <div className="library-server-panel">
+                            {renderLocalServerPanel()}
+                        </div>
                     </section>
                 )}
 
                 {screen === 'create' && (
+                    <section className="create-layout">
                     <form className="form-grid" onSubmit={createProfile}>
                         <div className="wide catalog-status">
                             <div>
@@ -2533,6 +2674,8 @@ function App() {
                             <button className="primary" type="submit">Create profile</button>
                         </div>
                     </form>
+                    {renderLocalServerPanel()}
+                    </section>
                 )}
 
                 {screen === 'account' && (
@@ -2586,7 +2729,7 @@ function App() {
                         onRefreshGameLogs={refreshProfileGameLogs}
                         onReadGameLog={readProfileGameLog}
                         onOpenLogsFolder={openProfileLogsFolder}
-                        onOpenWindow={() => setLogsWindowOpen(true)}
+                        onOpenWindow={openDetachedLogsWindow}
                         onExportLogs={exportProfileLogs}
                     />
                 )}
@@ -2725,23 +2868,6 @@ function App() {
                         onConfirm={confirmPendingModrinthUpdate}
                     />
                 )}
-                {logsWindowOpen && (
-                    <LogsWindowDialog
-                        logs={launcherLogs}
-                        profiles={profiles}
-                        localServers={localServers}
-                        gameLogLists={profileGameLogLists}
-                        gameLogContents={profileGameLogContents}
-                        gameLogActionKey={gameLogActionKey}
-                        exportProfileId={selectedProfile?.id ?? selectedProfileId}
-                        onClearLogs={() => setLauncherLogs([])}
-                        onRefreshGameLogs={refreshProfileGameLogs}
-                        onReadGameLog={readProfileGameLog}
-                        onOpenLogsFolder={openProfileLogsFolder}
-                        onExportLogs={exportProfileLogs}
-                        onClose={() => setLogsWindowOpen(false)}
-                    />
-                )}
             </main>
         </div>
     );
@@ -2772,9 +2898,12 @@ function HomePanel({
     onLocalServerFormChange,
     onCreateLocalServer,
     onInstallLocalServer,
+    onRepairLocalServer,
     onStartLocalServer,
     onStopLocalServer,
     onOpenLocalServerFolder,
+    onOpenLocalServerSettings,
+    onOpenLocalServerTerminal,
     onInstallProfile,
     onRepairProfile,
     onInstallJava,
@@ -2808,9 +2937,12 @@ function HomePanel({
     onLocalServerFormChange: (form: LocalServerForm) => void;
     onCreateLocalServer: (event: FormEvent<HTMLFormElement>) => void;
     onInstallLocalServer: (id: string) => void;
+    onRepairLocalServer: (id: string) => void;
     onStartLocalServer: (id: string) => void;
     onStopLocalServer: (id: string) => void;
     onOpenLocalServerFolder: (id: string) => void;
+    onOpenLocalServerSettings: (id: string) => void;
+    onOpenLocalServerTerminal: (id: string) => void;
     onInstallProfile: (id: string) => void;
     onRepairProfile: (id: string) => void;
     onInstallJava: (version: number) => void;
@@ -2934,9 +3066,12 @@ function HomePanel({
                 onFormChange={onLocalServerFormChange}
                 onCreate={onCreateLocalServer}
                 onInstall={onInstallLocalServer}
+                onRepair={onRepairLocalServer}
                 onStart={onStartLocalServer}
                 onStop={onStopLocalServer}
                 onOpenFolder={onOpenLocalServerFolder}
+                onOpenSettings={onOpenLocalServerSettings}
+                onOpenTerminal={onOpenLocalServerTerminal}
             />
 
             {selectedProfile ? (
@@ -2984,9 +3119,12 @@ function LocalServerQuickPanel({
     onFormChange,
     onCreate,
     onInstall,
+    onRepair,
     onStart,
     onStop,
-    onOpenFolder
+    onOpenFolder,
+    onOpenSettings,
+    onOpenTerminal
 }: {
     servers: domain.LocalServer[];
     selectedServer?: domain.LocalServer;
@@ -3000,9 +3138,12 @@ function LocalServerQuickPanel({
     onFormChange: (form: LocalServerForm) => void;
     onCreate: (event: FormEvent<HTMLFormElement>) => void;
     onInstall: (id: string) => void;
+    onRepair: (id: string) => void;
     onStart: (id: string) => void;
     onStop: (id: string) => void;
     onOpenFolder: (id: string) => void;
+    onOpenSettings: (id: string) => void;
+    onOpenTerminal: (id: string) => void;
 }) {
     const creating = actionKey === 'server:create';
     const selectedProgress = selectedServer ? progressByServer[selectedServer.id] : undefined;
@@ -3106,10 +3247,13 @@ function LocalServerQuickPanel({
                             const run = runStates[server.id];
                             const active = server.id === selectedServerId;
                             const installing = isLocalServerInstalling(server, progress);
+                            const repairing = server.install?.status === 'repairing';
                             const running = run?.status === 'running' || run?.status === 'starting';
                             const startReason = localServerStartDisabledReason(server, progress, run);
-                            const installVisible = server.install?.status !== 'installed' || installing;
+                            const installVisible = shouldShowLocalServerInstallButton(server, progress);
+                            const repairVisible = shouldShowLocalServerRepairButton(server, progress);
                             const busy = actionKey.startsWith(`${server.id}:`);
+                            const settingsDisabled = busy || server.install?.status !== 'installed';
 
                             return (
                                 <article key={server.id} className={active ? 'local-server-row active' : 'local-server-row'}>
@@ -3124,6 +3268,11 @@ function LocalServerQuickPanel({
                                                 {installing ? 'Installing' : 'Install'}
                                             </button>
                                         )}
+                                        {repairVisible && (
+                                            <button className="small" type="button" disabled={installing || busy || running} onClick={() => onRepair(server.id)}>
+                                                {repairing ? 'Repairing' : 'Repair'}
+                                            </button>
+                                        )}
                                         {running ? (
                                             <button className="small danger" type="button" disabled={busy} onClick={() => onStop(server.id)}>
                                                 Stop
@@ -3135,6 +3284,12 @@ function LocalServerQuickPanel({
                                         )}
                                         <button className="small" type="button" disabled={busy} onClick={() => onOpenFolder(server.id)}>
                                             Folder
+                                        </button>
+                                        <button className="small" type="button" disabled={settingsDisabled} onClick={() => onOpenSettings(server.id)}>
+                                            Settings
+                                        </button>
+                                        <button className="small" type="button" disabled={busy} onClick={() => onOpenTerminal(server.id)}>
+                                            Terminal
                                         </button>
                                     </div>
                                     {active && (progress || run) && (
@@ -3493,7 +3648,7 @@ function BrowsePanel({
                     <input
                         value={query}
                         placeholder="Search mods"
-                        disabled={!canBrowse || loading}
+                        disabled={loading}
                         onChange={(event) => onQueryChange(event.target.value)}
                     />
                     <button className="primary" type="submit" disabled={!canBrowse || loading}>
@@ -4889,7 +5044,7 @@ function ClassicLogsPanel({
                         <p>{filteredLogs.length} visible events{errorCount > 0 ? ` / ${errorCount} errors` : ''}</p>
                     </div>
                     <div className="logs-actions">
-                        {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open window</button>}
+                        {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open detached window</button>}
                         <button
                             type="button"
                             disabled={!exportProfile || gameLogActionKey === `${exportProfile?.id}:logs:export`}
@@ -4966,7 +5121,7 @@ function ClassicLogsPanel({
                                 <p>{gameLogStatusText(gameProfile, gameLogList, selectedGameContent, liveGameLogs, gameFileName)}</p>
                             </div>
                             <div className="logs-actions">
-                                {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open window</button>}
+                                {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open detached window</button>}
                                 <button type="button" disabled={!gameProfile} onClick={copyGameLog}>Copy visible</button>
                                 <button
                                     type="button"
@@ -5051,64 +5206,6 @@ function ClassicLogsPanel({
                 )}
             </section>
         </section>
-    );
-}
-
-function LogsWindowDialog({
-    logs,
-    profiles,
-    localServers,
-    gameLogLists,
-    gameLogContents,
-    gameLogActionKey,
-    exportProfileId,
-    onClearLogs,
-    onRefreshGameLogs,
-    onReadGameLog,
-    onOpenLogsFolder,
-    onExportLogs,
-    onClose
-}: {
-    logs: LauncherLog[];
-    profiles: domain.Profile[];
-    localServers: domain.LocalServer[];
-    gameLogLists: Record<string, domain.GameLogList>;
-    gameLogContents: Record<string, domain.GameLogContent>;
-    gameLogActionKey: string;
-    exportProfileId: string;
-    onClearLogs: () => void;
-    onRefreshGameLogs: (profileId: string) => void;
-    onReadGameLog: (profileId: string, fileName: string) => void;
-    onOpenLogsFolder: (profileId: string) => void;
-    onExportLogs: (profileId: string) => void;
-    onClose: () => void;
-}) {
-    return (
-        <div className="modal-backdrop logs-window-backdrop" role="dialog" aria-modal="true" aria-label="Logs window">
-            <section className="logs-window">
-                <header className="logs-window-header">
-                    <div>
-                        <p className="eyebrow">Detached panel</p>
-                        <h2>Logs window</h2>
-                    </div>
-                    <button type="button" onClick={onClose}>Close</button>
-                </header>
-                <ClassicLogsPanel
-                    logs={logs}
-                    profiles={profiles}
-                    localServers={localServers}
-                    gameLogLists={gameLogLists}
-                    gameLogContents={gameLogContents}
-                    gameLogActionKey={gameLogActionKey}
-                    exportProfileId={exportProfileId}
-                    onClearLogs={onClearLogs}
-                    onRefreshGameLogs={onRefreshGameLogs}
-                    onReadGameLog={onReadGameLog}
-                    onOpenLogsFolder={onOpenLogsFolder}
-                    onExportLogs={onExportLogs}
-                />
-            </section>
-        </div>
     );
 }
 
@@ -5216,6 +5313,21 @@ function launcherLogExportText(logs: LauncherLog[], profiles: domain.Profile[], 
     const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
     const localServersById = new Map(localServers.map((server) => [server.id, server]));
     return [...logs].reverse().map((log) => formatLauncherLogLine(log, profilesById, localServersById)).join('\n');
+}
+
+function detachedLogsSnapshot(logs: LauncherLog[], profiles: domain.Profile[], localServers: domain.LocalServer[] = []) {
+    const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
+    const localServersById = new Map(localServers.map((server) => [server.id, server]));
+    return JSON.stringify({
+        updatedAt: new Date().toISOString(),
+        logs: logs.slice(0, 1000).map((log) => ({
+            time: log.time,
+            level: log.level,
+            source: log.source,
+            target: logProfileLabel(log, profilesById, localServersById),
+            message: log.message,
+        })),
+    });
 }
 
 function logExportMessage(result: domain.LogExportResult) {
@@ -5340,6 +5452,8 @@ function localServerInstallStatusText(server: domain.LocalServer) {
             return 'Installed';
         case 'installing':
             return 'Installing';
+        case 'repairing':
+            return 'Repairing';
         case 'failed':
             return 'Failed';
         default:
@@ -5399,7 +5513,7 @@ function isInstalling(profile: domain.Profile, progressByProfile: Record<string,
 }
 
 function isLocalServerInstalling(server: domain.LocalServer, progress?: LocalServerProgress) {
-    return server.install?.status === 'installing' || (!!progress && !progress.done && progress.stage !== 'failed');
+    return server.install?.status === 'installing' || server.install?.status === 'repairing' || (!!progress && !progress.done && progress.stage !== 'failed');
 }
 
 function localServerStartDisabledReason(
@@ -5411,6 +5525,9 @@ function localServerStartDisabledReason(
         return 'Already running';
     }
     if (isLocalServerInstalling(server, progress)) {
+        if (server.install?.status === 'repairing') {
+            return 'Repair in progress';
+        }
         return 'Install in progress';
     }
     if (server.install?.status !== 'installed') {
@@ -5445,6 +5562,20 @@ function shouldShowInstallButton(profile: domain.Profile, progress?: InstallProg
         return false;
     }
     return profile.install?.status !== 'installed' || (!!progress && !progress.done && progress.stage !== 'failed');
+}
+
+function shouldShowLocalServerInstallButton(server: domain.LocalServer, progress?: LocalServerProgress) {
+    if (server.install?.status === 'installed' || server.install?.status === 'repairing') {
+        return false;
+    }
+    return server.install?.status !== 'installed' || (!!progress && !progress.done && progress.stage !== 'failed');
+}
+
+function shouldShowLocalServerRepairButton(server: domain.LocalServer, progress?: LocalServerProgress) {
+    if (server.install?.status === 'installed') {
+        return !progress || progress.done || progress.stage === 'failed';
+    }
+    return server.install?.status === 'repairing';
 }
 
 function shouldShowRepairButton(profile: domain.Profile, progress?: InstallProgress) {
