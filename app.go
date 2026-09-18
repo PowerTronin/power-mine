@@ -2236,22 +2236,22 @@ func (a *App) StartLocalServer(id string) (domain.LocalServerRunState, error) {
 		return domain.LocalServerRunState{}, err
 	}
 	javaPath, requiredJava, err := a.ensureMinecraftJavaRuntime(server.MinecraftVersion, currentSettings.JavaPath, func(required int) {
-		a.emitLocalServerProgress(domain.LocalServerProgress{
+		a.emitLocalServerEvent(domain.LocalServerEvent{
 			ServerID: id,
-			Stage:    "java-runtime",
+			Status:   domain.LaunchStarting,
 			Message:  fmt.Sprintf("Installing Java %d runtime", required),
-			Percent:  10,
+			Time:     time.Now().UTC().Format(time.RFC3339),
 		})
 	})
 	if err != nil {
 		return domain.LocalServerRunState{}, err
 	}
 	if requiredJava > 0 {
-		a.emitLocalServerProgress(domain.LocalServerProgress{
+		a.emitLocalServerEvent(domain.LocalServerEvent{
 			ServerID: id,
-			Stage:    "java-runtime",
+			Status:   domain.LaunchStarting,
 			Message:  fmt.Sprintf("Using Java %d runtime", requiredJava),
-			Percent:  20,
+			Time:     time.Now().UTC().Format(time.RFC3339),
 		})
 	}
 

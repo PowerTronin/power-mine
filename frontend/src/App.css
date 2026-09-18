@@ -237,6 +237,26 @@
     gap: 10px;
 }
 
+.server-actions {
+    margin-top: 20px;
+}
+
+.server-actions .install-action {
+    order: 10;
+}
+
+.server-actions .server-run-action {
+    order: 20;
+}
+
+.server-actions button:not(.install-action):not(.server-run-action) {
+    order: 30;
+}
+
+.server-actions .action-hint {
+    order: 40;
+}
+
 .quick-actions {
     min-width: min(360px, 100%);
     display: flex;
@@ -2235,8 +2255,16 @@ input:disabled {
 }
 
 .nav-item.active em {
-    color: var(--pc-text);
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    border: 1px solid var(--pc-border);
+    background: var(--pc-text);
+    color: transparent;
+    font-size: 0;
     font-style: normal;
+    letter-spacing: 0;
+    overflow: hidden;
 }
 
 .workspace {

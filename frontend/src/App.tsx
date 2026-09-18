@@ -477,17 +477,19 @@ function App() {
             if (!event?.serverId) {
                 return;
             }
-            setLocalServerRunStates((current) => ({
-                ...current,
-                [event.serverId]: {
-                    serverId: event.serverId,
-                    status: event.status,
-                    message: event.message,
-                    exitCode: event.exitCode,
-                    endedAt: event.status === 'stopped' || event.status === 'failed' ? event.time : current[event.serverId]?.endedAt,
-                    startedAt: current[event.serverId]?.startedAt ?? event.time,
-                },
-            }));
+            if (!event.stream) {
+                setLocalServerRunStates((current) => ({
+                    ...current,
+                    [event.serverId]: {
+                        serverId: event.serverId,
+                        status: event.status,
+                        message: event.message,
+                        exitCode: event.exitCode,
+                        endedAt: event.status === 'stopped' || event.status === 'failed' ? event.time : current[event.serverId]?.endedAt,
+                        startedAt: current[event.serverId]?.startedAt ?? event.time,
+                    },
+                }));
+            }
             appendLog({
                 level: event.status === 'failed' ? 'error' : event.status === 'stopped' ? 'success' : 'info',
                 source: event.stream ? `Server ${event.stream}` : 'Server',
@@ -2448,7 +2450,7 @@ function App() {
                                 >
                                     <span className="nav-mark">{item.mark}</span>
                                     <strong>{item.label}</strong>
-                                    {active && <em>ACTIVE</em>}
+                                    {active && <em aria-hidden="true"/>}
                                 </button>
                             );
                         })}
@@ -2558,7 +2560,6 @@ function App() {
                                 </button>
                             ))}
                             {localServers.map((server) => {
-                                const progress = localServerProgress[server.id];
                                 const run = localServerRunStates[server.id];
                                 const active = libraryDetailType === 'server' && librarySelectedLocalServer?.id === server.id;
 
@@ -2574,7 +2575,7 @@ function App() {
                                             <span>Server</span>
                                         </div>
                                         <span>{localServerSubtitle(server)}</span>
-                                        <small>{localServerStatusText(server, progress, run)}</small>
+                                        <small>{localServerStatusText(server, run)}</small>
                                     </button>
                                 );
                             })}
@@ -3519,6 +3520,7 @@ function HomeInstallationsPanel({
                 {visibleServers.map((server) => {
                     const progress = localServerProgress[server.id];
                     const run = localServerRunStates[server.id];
+                    const visibleProgress = shouldShowLocalServerProgress(server, progress);
                     const active = server.id === selectedLocalServerId;
                     const installing = isLocalServerInstalling(server, progress);
                     const repairing = server.install?.status === 'repairing';
@@ -3536,7 +3538,7 @@ function HomeInstallationsPanel({
                                     <span>Server</span>
                                 </div>
                                 <span>{localServerSubtitle(server)}</span>
-                                <small>{localServerStatusText(server, progress, run)}</small>
+                                <small>{localServerStatusText(server, run)}</small>
                             </div>
                             <div className="home-profile-actions">
                                 <button className="small" type="button" disabled={active} onClick={() => onSelectLocalServer(server.id)}>
@@ -3571,11 +3573,10 @@ function HomeInstallationsPanel({
                                     Terminal
                                 </button>
                             </div>
-                            {(active || progress || run) && (
+                            {visibleProgress && (
                                 <div className="local-server-detail">
-                                    {progress && <ProgressBar progress={progress}/>}
-                                    {run && <p>{localServerRunStatusText(run)}</p>}
-                                    {startReason && <p>{startReason}</p>}
+                                    <ProgressBar progress={progress}/>
+                                    <p>{localServerProgressMessage(progress)}</p>
                                 </div>
                             )}
                         </article>
@@ -3622,6 +3623,7 @@ function LocalServerDetail({
     const installVisible = shouldShowLocalServerInstallButton(server, progress);
     const repairVisible = shouldShowLocalServerRepairButton(server, progress);
     const busy = actionKey.startsWith(`${server.id}:`);
+    const visibleProgress = shouldShowLocalServerProgress(server, progress);
 
     return (
         <section className="profile-detail">
@@ -3635,10 +3637,10 @@ function LocalServerDetail({
                     <span>Server status</span>
                     <strong>{localServerInstallStatusText(server)}</strong>
                     {server.install?.lastError && <p>{server.install.lastError}</p>}
-                    {progress?.message && <p>{localServerProgressMessage(progress)}</p>}
+                    {visibleProgress && <p>{localServerProgressMessage(progress)}</p>}
                     {run && <p>{localServerRunStatusText(run)}</p>}
                 </div>
-                <ProgressBar progress={progress}/>
+                {visibleProgress && <ProgressBar progress={progress}/>}
             </div>
             <dl className="detail-grid compact">
                 <div>
@@ -3664,23 +3666,23 @@ function LocalServerDetail({
                     <p>{server.serverDir || 'Default local server directory'}</p>
                 </div>
             </div>
-            <div className="actions">
+            <div className="actions server-actions">
                 {installVisible && (
-                    <button type="button" disabled={installing || busy} onClick={() => onInstall(server.id)}>
+                    <button className="install-action" type="button" disabled={installing || busy} onClick={() => onInstall(server.id)}>
                         {installing ? 'Installing' : 'Install'}
                     </button>
                 )}
                 {repairVisible && (
-                    <button type="button" disabled={installing || busy || running} onClick={() => onRepair(server.id)}>
+                    <button className="install-action" type="button" disabled={installing || busy || running} onClick={() => onRepair(server.id)}>
                         {repairing ? 'Repairing' : 'Repair'}
                     </button>
                 )}
                 {running ? (
-                    <button className="danger" type="button" disabled={busy} onClick={() => onStop(server.id)}>
+                    <button className="danger server-run-action" type="button" disabled={busy} onClick={() => onStop(server.id)}>
                         Stop
                     </button>
                 ) : (
-                    <button className="primary" type="button" disabled={!!startReason || busy} onClick={() => onStart(server.id)}>
+                    <button className="primary server-run-action" type="button" disabled={!!startReason || busy} onClick={() => onStart(server.id)}>
                         Start
                     </button>
                 )}
@@ -3952,6 +3954,7 @@ function LocalServerSettingsDialog({
     const repairVisible = shouldShowLocalServerRepairButton(server, progress);
     const busy = actionKey.startsWith(`${server.id}:`);
     const rawSettingsDisabled = busy || server.install?.status !== 'installed';
+    const visibleProgress = shouldShowLocalServerProgress(server, progress);
 
     return (
         <div className="modal-backdrop" role="presentation">
@@ -4009,9 +4012,9 @@ function LocalServerSettingsDialog({
                             Inline editing is next; for now this opens the raw settings file without losing unknown keys.
                         </p>
                     </div>
-                    {(progress || run || startReason) && (
+                    {(visibleProgress || run || startReason) && (
                         <div className="local-server-detail wide">
-                            {progress && <ProgressBar progress={progress}/>}
+                            {visibleProgress && <ProgressBar progress={progress}/>}
                             {run && <p>{localServerRunStatusText(run)}</p>}
                             {startReason && <p>{startReason}</p>}
                         </div>
@@ -5923,15 +5926,25 @@ function localServerRunStatusText(run: LocalServerRunState) {
     }
 }
 
-function localServerStatusText(server: domain.LocalServer, progress?: LocalServerProgress, run?: LocalServerRunState) {
+function localServerStatusText(server: domain.LocalServer, run?: LocalServerRunState) {
     const parts = [localServerInstallStatusText(server)];
     if (run) {
-        parts.push(localServerRunStatusText(run));
-    }
-    if (progress && !progress.done) {
-        parts.push(localServerProgressMessage(progress));
+        parts.push(compactLaunchStatusText(run.status));
     }
     return parts.join(' / ');
+}
+
+function compactLaunchStatusText(status: LocalServerRunState['status']) {
+    switch (status) {
+        case 'running':
+            return 'Running';
+        case 'starting':
+            return 'Starting';
+        case 'stopped':
+            return 'Stopped';
+        case 'failed':
+            return 'Failed';
+    }
 }
 
 function localServerInstallStatusText(server: domain.LocalServer) {
@@ -6001,7 +6014,24 @@ function isInstalling(profile: domain.Profile, progressByProfile: Record<string,
 }
 
 function isLocalServerInstalling(server: domain.LocalServer, progress?: LocalServerProgress) {
-    return server.install?.status === 'installing' || server.install?.status === 'repairing' || (!!progress && !progress.done && progress.stage !== 'failed');
+    if (server.install?.status === 'installing' || server.install?.status === 'repairing') {
+        return true;
+    }
+    if (server.install?.status === 'installed') {
+        return false;
+    }
+    return isActiveLocalServerProgress(progress);
+}
+
+function isActiveLocalServerProgress(progress?: LocalServerProgress) {
+    return !!progress && !progress.done && progress.stage !== 'failed' && progress.stage !== 'complete';
+}
+
+function shouldShowLocalServerProgress(
+    server: domain.LocalServer,
+    progress?: LocalServerProgress
+): progress is LocalServerProgress {
+    return (server.install?.status === 'installing' || server.install?.status === 'repairing') && isActiveLocalServerProgress(progress);
 }
 
 function localServerStartDisabledReason(
@@ -6061,7 +6091,7 @@ function shouldShowLocalServerInstallButton(server: domain.LocalServer, progress
 
 function shouldShowLocalServerRepairButton(server: domain.LocalServer, progress?: LocalServerProgress) {
     if (server.install?.status === 'installed') {
-        return !progress || progress.done || progress.stage === 'failed';
+        return !isActiveLocalServerProgress(progress);
     }
     return server.install?.status === 'repairing';
 }
