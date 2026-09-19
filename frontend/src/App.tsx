@@ -282,6 +282,7 @@ function App() {
     const [versionCatalogWarning, setVersionCatalogWarning] = useState('');
     const [modpackImporting, setModpackImporting] = useState(false);
     const [appRefreshing, setAppRefreshing] = useState(false);
+    const [refreshStatus, setRefreshStatus] = useState('');
     const [createForm, setCreateForm] = useState(defaultCreateForm);
     const [localServerForm, setLocalServerForm] = useState<LocalServerForm>(defaultLocalServerForm);
     const [localServerActionKey, setLocalServerActionKey] = useState('');
@@ -616,6 +617,7 @@ function App() {
             setAppRefreshing(true);
             setError('');
             setMessage('');
+            setRefreshStatus('Refreshing...');
             await refreshApp();
             await validateJava();
             if (profileId) {
@@ -632,7 +634,7 @@ function App() {
             if (screen === 'create') {
                 await refreshVersionOptions();
             }
-            setMessage('Launcher state refreshed.');
+            setRefreshStatus(`Refreshed ${new Date().toLocaleTimeString()}`);
             appendLog({
                 level: 'success',
                 source: 'App',
@@ -642,6 +644,7 @@ function App() {
         } catch (err) {
             const text = errorText(err);
             setError(text);
+            setRefreshStatus('Refresh failed');
             appendLog({
                 level: 'error',
                 source: 'App',
@@ -2536,6 +2539,14 @@ function App() {
                         <div className="account-pill muted-pill">
                             build {info?.version ?? '0.2.0'}
                         </div>
+                        {refreshStatus && (
+                            <div
+                                className={refreshStatus === 'Refresh failed' ? 'topbar-status failed' : 'topbar-status'}
+                                aria-live="polite"
+                            >
+                                {refreshStatus}
+                            </div>
+                        )}
                         <button type="button" onClick={refreshVisibleState} disabled={appRefreshing}>
                             {appRefreshing ? 'Refreshing' : 'Refresh'}
                         </button>
@@ -3735,29 +3746,37 @@ function LocalServerDetail({
                     <p>{server.serverDir || 'Default local server directory'}</p>
                 </div>
             </div>
-            <div className="actions server-actions">
-                {installVisible && (
-                    <button className="install-action" type="button" disabled={installing || busy} onClick={() => onInstall(server.id)}>
-                        {installing ? 'Installing' : 'Install'}
-                    </button>
+            <div className="server-action-dock">
+                {(installVisible || repairVisible) && (
+                    <div className="server-action-group">
+                        {installVisible && (
+                            <button type="button" disabled={installing || busy} onClick={() => onInstall(server.id)}>
+                                {installing ? 'Installing' : 'Install'}
+                            </button>
+                        )}
+                        {repairVisible && (
+                            <button type="button" disabled={installing || busy || running} onClick={() => onRepair(server.id)}>
+                                {repairing ? 'Repairing' : 'Repair'}
+                            </button>
+                        )}
+                    </div>
                 )}
-                {repairVisible && (
-                    <button className="install-action" type="button" disabled={installing || busy || running} onClick={() => onRepair(server.id)}>
-                        {repairing ? 'Repairing' : 'Repair'}
-                    </button>
-                )}
-                {running ? (
-                    <button className="danger server-run-action" type="button" disabled={busy} onClick={() => onStop(server.id)}>
-                        Stop
-                    </button>
-                ) : (
-                    <button className="primary server-run-action" type="button" disabled={!!startReason || busy} onClick={() => onStart(server.id)}>
-                        Start
-                    </button>
-                )}
-                <button type="button" disabled={busy} onClick={() => onOpenFolder(server.id)}>Folder</button>
-                <button type="button" onClick={() => onOpenSettings(server)}>Settings</button>
-                <button type="button" disabled={busy} onClick={() => onOpenTerminal(server.id)}>Terminal</button>
+                <div className="server-action-group">
+                    {running ? (
+                        <button className="danger" type="button" disabled={busy} onClick={() => onStop(server.id)}>
+                            Stop
+                        </button>
+                    ) : (
+                        <button className="primary" type="button" disabled={!!startReason || busy} onClick={() => onStart(server.id)}>
+                            Start
+                        </button>
+                    )}
+                </div>
+                <div className="server-action-group secondary">
+                    <button type="button" disabled={busy} onClick={() => onOpenFolder(server.id)}>Folder</button>
+                    <button type="button" onClick={() => onOpenSettings(server)}>Settings</button>
+                    <button type="button" disabled={busy} onClick={() => onOpenTerminal(server.id)}>Terminal</button>
+                </div>
                 {startReason && <p className="action-hint">{startReason}</p>}
             </div>
         </section>
