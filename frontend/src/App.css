@@ -1,13 +1,24 @@
+.app-shell,
+.app-shell *,
+.app-shell *::before,
+.app-shell *::after {
+    box-sizing: border-box;
+}
+
 .app-shell {
-    min-height: 100vh;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
     display: grid;
     grid-template-columns: 236px minmax(0, 1fr);
     background: #121411;
     color: #f1f4ed;
+    overflow: hidden;
 }
 
 .rail {
-    min-height: 100vh;
+    height: 100%;
+    min-height: 0;
     border-right: 1px solid #2c3329;
     background: #191d17;
     padding: 18px 14px;
@@ -91,10 +102,12 @@
 
 .workspace {
     min-width: 0;
+    min-height: 0;
     padding: 24px;
     display: flex;
     flex-direction: column;
     gap: 18px;
+    overflow: auto;
 }
 
 .topbar {
@@ -2053,6 +2066,8 @@ input:disabled {
 /* Power-Call visual port: monochrome operator shell, hard panels, mono controls. */
 .app-shell {
     height: 100vh;
+    height: 100dvh;
+    min-height: 0;
     grid-template-columns: 220px minmax(0, 1fr);
     background: var(--pc-bg);
     color: var(--pc-text);
@@ -2062,8 +2077,8 @@ input:disabled {
 .rail {
     position: sticky;
     top: 0;
-    height: 100vh;
-    min-height: 100vh;
+    height: 100%;
+    min-height: 0;
     box-sizing: border-box;
     justify-content: space-between;
     gap: 18px;
@@ -2268,8 +2283,8 @@ input:disabled {
 }
 
 .workspace {
-    height: 100vh;
-    min-height: 100vh;
+    height: 100%;
+    min-height: 0;
     overflow: auto;
     background: var(--pc-bg);
     padding: 24px;

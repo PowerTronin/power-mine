@@ -25,6 +25,7 @@
 html,
 body,
 #root {
+    min-height: 100%;
     background-color: var(--pc-bg);
     color: var(--pc-text);
 }
@@ -49,4 +50,5 @@ body {
 #root,
 #app {
     height: 100vh;
+    height: 100dvh;
 }
