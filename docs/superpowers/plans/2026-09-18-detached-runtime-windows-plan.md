@@ -15,13 +15,15 @@ Make runtime tools feel like launcher-native utilities instead of browser tabs:
 
 ## Current Status
 
-As of `f948994`, detached runtime tools open as native OS-level Wails helper windows backed by the main launcher process. The helper window loads a loopback-only proxied view, keeps one window per logs/server target, and focuses the existing window when reopened. Browser HTTP views remain implementation fallback plumbing, not the primary user path.
+As of the current pass, detached runtime tools open as native OS-level Wails helper windows backed by the main launcher process. The helper window loads a loopback-only proxied view, keeps one window per logs/server target, and focuses the existing window when reopened. Browser HTTP views remain implementation fallback plumbing, not the primary user path.
 
-In the current lifecycle pass, main and helper windows also arm a close watchdog so window-manager close events cannot leave hidden Wails processes alive indefinitely.
+Main and helper windows also arm a close watchdog so window-manager close events cannot leave hidden Wails processes alive indefinitely.
+
+Detached logs and server terminal now use server-sent events for live updates, with the previous HTTP polling kept only as a browser/runtime fallback. Terminal streams subscribe atomically with history capture so events cannot slip between the initial history response and live updates.
 
 Known follow-ups:
 
-- Milestone 2 event synchronization exists through snapshots and backend event history, but needs a dedicated pass to verify live streaming and stale-state prevention under real launches.
+- Milestone 3 detached window UX remains open: copy, clear visible output, auto-scroll controls, status chips, filters, and remembered placement.
 
 ## Product Decisions
 
@@ -55,12 +57,14 @@ Acceptance:
 
 Goal: keep detached windows live without polling-heavy UI hacks.
 
+Status: complete.
+
 Tasks:
 
-- Reuse existing server/game event history as the initial snapshot.
-- Stream new runtime events into the matching detached window.
-- Keep terminal input routed through the backend server command API.
-- Prevent log stream events from overwriting lifecycle state in the main UI.
+- [x] Reuse existing server/game event history as the initial snapshot.
+- [x] Stream new runtime events into the matching detached window.
+- [x] Keep terminal input routed through the backend server command API.
+- [x] Prevent log stream events from overwriting lifecycle state in the main UI.
 
 Acceptance:
 

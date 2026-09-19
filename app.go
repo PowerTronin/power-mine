@@ -37,37 +37,40 @@ import (
 )
 
 type App struct {
-	ctx              context.Context
-	mu               sync.RWMutex
-	launchMu         sync.Mutex
-	settingsService  *settings.Service
-	profileService   *profiles.Service
-	catalogService   *catalog.Service
-	minecraftService *minecraft.Service
-	javaService      *javasvc.Service
-	modpackService   *modpacks.Service
-	modsService      *mods.Service
-	serverService    *servers.Service
-	running          map[string]*exec.Cmd
-	launchDone       map[string]chan struct{}
-	serverInputs     map[string]io.WriteCloser
-	stopping         map[string]bool
-	externalMu       sync.RWMutex
-	externalServer   *http.Server
-	externalBaseURL  string
-	externalToken    string
-	logsSnapshot     string
-	serverEvents     map[string][]domain.LocalServerEvent
-	nativeWindowMu   sync.Mutex
-	nativeWindows    map[string]*nativeWindowProcess
-	startupErr       error
-	headless         bool
+	ctx               context.Context
+	mu                sync.RWMutex
+	launchMu          sync.Mutex
+	settingsService   *settings.Service
+	profileService    *profiles.Service
+	catalogService    *catalog.Service
+	minecraftService  *minecraft.Service
+	javaService       *javasvc.Service
+	modpackService    *modpacks.Service
+	modsService       *mods.Service
+	serverService     *servers.Service
+	running           map[string]*exec.Cmd
+	launchDone        map[string]chan struct{}
+	serverInputs      map[string]io.WriteCloser
+	stopping          map[string]bool
+	externalMu        sync.RWMutex
+	externalServer    *http.Server
+	externalBaseURL   string
+	externalToken     string
+	logsSnapshot      string
+	serverEvents      map[string][]domain.LocalServerEvent
+	logSubscribers    map[chan string]struct{}
+	serverSubscribers map[string]map[chan domain.LocalServerEvent]struct{}
+	nativeWindowMu    sync.Mutex
+	nativeWindows     map[string]*nativeWindowProcess
+	startupErr        error
+	headless          bool
 }
 
 const (
 	maxModrinthDependencyDepth      = 12
 	localServerStartupFailureWindow = 15 * time.Second
 	maxLocalServerTerminalEvents    = 1000
+	defaultDetachedLogsSnapshot     = `{"logs":[],"profiles":[],"localServers":[]}`
 )
 
 type modrinthInstallState struct {
@@ -88,12 +91,14 @@ type modrinthInstallPlanState struct {
 
 func NewApp() *App {
 	return &App{
-		running:       make(map[string]*exec.Cmd),
-		launchDone:    make(map[string]chan struct{}),
-		serverInputs:  make(map[string]io.WriteCloser),
-		stopping:      make(map[string]bool),
-		serverEvents:  make(map[string][]domain.LocalServerEvent),
-		nativeWindows: make(map[string]*nativeWindowProcess),
+		running:           make(map[string]*exec.Cmd),
+		launchDone:        make(map[string]chan struct{}),
+		serverInputs:      make(map[string]io.WriteCloser),
+		stopping:          make(map[string]bool),
+		serverEvents:      make(map[string][]domain.LocalServerEvent),
+		logSubscribers:    make(map[chan string]struct{}),
+		serverSubscribers: make(map[string]map[chan domain.LocalServerEvent]struct{}),
+		nativeWindows:     make(map[string]*nativeWindowProcess),
 	}
 }
 
@@ -2717,13 +2722,16 @@ func (a *App) emitLocalServerEvent(event domain.LocalServerEvent) {
 func (a *App) setLogsSnapshot(snapshot string) error {
 	snapshot = strings.TrimSpace(snapshot)
 	if snapshot == "" {
-		snapshot = `{"logs":[],"profiles":[],"localServers":[]}`
+		snapshot = defaultDetachedLogsSnapshot
 	}
 	if !json.Valid([]byte(snapshot)) {
 		return fmt.Errorf("detached logs snapshot is not valid JSON")
 	}
 	a.externalMu.Lock()
 	a.logsSnapshot = snapshot
+	for subscriber := range a.logSubscribers {
+		sendLatestLogSnapshot(subscriber, snapshot)
+	}
 	a.externalMu.Unlock()
 	return nil
 }
@@ -2762,6 +2770,7 @@ func (a *App) ensureExternalWindowServer() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/logs", a.handleDetachedLogsPage)
 	mux.HandleFunc("/server-terminal/", a.handleServerTerminalPage)
+	mux.HandleFunc("/api/logs/stream", a.handleDetachedLogsStream)
 	mux.HandleFunc("/api/logs", a.handleDetachedLogsAPI)
 	mux.HandleFunc("/api/server/", a.handleServerTerminalAPI)
 
@@ -2770,7 +2779,7 @@ func (a *App) ensureExternalWindowServer() error {
 	a.externalBaseURL = "http://" + listener.Addr().String()
 	a.externalToken = token
 	if a.logsSnapshot == "" {
-		a.logsSnapshot = `{"logs":[],"profiles":[],"localServers":[]}`
+		a.logsSnapshot = defaultDetachedLogsSnapshot
 	}
 
 	go func() {
@@ -2822,10 +2831,51 @@ func (a *App) handleDetachedLogsAPI(w http.ResponseWriter, r *http.Request) {
 	snapshot := a.logsSnapshot
 	a.externalMu.RUnlock()
 	if snapshot == "" {
-		snapshot = `{"logs":[],"profiles":[],"localServers":[]}`
+		snapshot = defaultDetachedLogsSnapshot
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = io.WriteString(w, snapshot)
+}
+
+func (a *App) handleDetachedLogsStream(w http.ResponseWriter, r *http.Request) {
+	if !a.externalRequestAllowed(r) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	snapshot, updates, unsubscribe := a.subscribeLogSnapshots()
+	defer unsubscribe()
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	if err := writeServerSentEvent(w, "snapshot", []byte(snapshot)); err != nil {
+		return
+	}
+	flusher.Flush()
+
+	for {
+		select {
+		case snapshot, ok := <-updates:
+			if !ok {
+				return
+			}
+			if err := writeServerSentEvent(w, "snapshot", []byte(snapshot)); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (a *App) handleServerTerminalPage(w http.ResponseWriter, r *http.Request) {
@@ -2866,6 +2916,12 @@ func (a *App) handleServerTerminalAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]any{"events": a.localServerEventHistory(serverID)})
+	case "stream":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		a.handleServerTerminalStream(w, r, serverID)
 	case "command":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -2890,6 +2946,47 @@ func (a *App) handleServerTerminalAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) handleServerTerminalStream(w http.ResponseWriter, r *http.Request, serverID string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	history, updates, unsubscribe := a.subscribeLocalServerEvents(serverID)
+	defer unsubscribe()
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	payload, err := json.Marshal(map[string]any{"events": history})
+	if err != nil {
+		http.Error(w, "encode terminal history", http.StatusInternalServerError)
+		return
+	}
+	if err := writeServerSentEvent(w, "history", payload); err != nil {
+		return
+	}
+	flusher.Flush()
+
+	for {
+		select {
+		case event, ok := <-updates:
+			if !ok {
+				return
+			}
+			payload, err := json.Marshal(event)
+			if err != nil {
+				return
+			}
+			if err := writeServerSentEvent(w, "server-event", payload); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
 func (a *App) recordLocalServerEvent(event domain.LocalServerEvent) {
 	if event.ServerID == "" {
 		return
@@ -2904,6 +3001,9 @@ func (a *App) recordLocalServerEvent(event domain.LocalServerEvent) {
 		events = append([]domain.LocalServerEvent(nil), events[len(events)-maxLocalServerTerminalEvents:]...)
 	}
 	a.serverEvents[event.ServerID] = events
+	for subscriber := range a.serverSubscribers[event.ServerID] {
+		sendLatestLocalServerEvent(subscriber, event)
+	}
 }
 
 func (a *App) localServerEventHistory(serverID string) []domain.LocalServerEvent {
@@ -2911,6 +3011,86 @@ func (a *App) localServerEventHistory(serverID string) []domain.LocalServerEvent
 	defer a.externalMu.RUnlock()
 	events := a.serverEvents[serverID]
 	return append([]domain.LocalServerEvent(nil), events...)
+}
+
+func (a *App) subscribeLogSnapshots() (string, <-chan string, func()) {
+	a.externalMu.Lock()
+	defer a.externalMu.Unlock()
+	if a.logSubscribers == nil {
+		a.logSubscribers = make(map[chan string]struct{})
+	}
+	snapshot := a.logsSnapshot
+	if snapshot == "" {
+		snapshot = defaultDetachedLogsSnapshot
+	}
+	updates := make(chan string, 1)
+	a.logSubscribers[updates] = struct{}{}
+	unsubscribe := func() {
+		a.externalMu.Lock()
+		defer a.externalMu.Unlock()
+		if _, ok := a.logSubscribers[updates]; ok {
+			delete(a.logSubscribers, updates)
+			close(updates)
+		}
+	}
+	return snapshot, updates, unsubscribe
+}
+
+func (a *App) subscribeLocalServerEvents(serverID string) ([]domain.LocalServerEvent, <-chan domain.LocalServerEvent, func()) {
+	a.externalMu.Lock()
+	defer a.externalMu.Unlock()
+	if a.serverSubscribers == nil {
+		a.serverSubscribers = make(map[string]map[chan domain.LocalServerEvent]struct{})
+	}
+	if a.serverSubscribers[serverID] == nil {
+		a.serverSubscribers[serverID] = make(map[chan domain.LocalServerEvent]struct{})
+	}
+	history := append([]domain.LocalServerEvent(nil), a.serverEvents[serverID]...)
+	updates := make(chan domain.LocalServerEvent, 32)
+	a.serverSubscribers[serverID][updates] = struct{}{}
+	unsubscribe := func() {
+		a.externalMu.Lock()
+		defer a.externalMu.Unlock()
+		subscribers := a.serverSubscribers[serverID]
+		if _, ok := subscribers[updates]; ok {
+			delete(subscribers, updates)
+			close(updates)
+		}
+		if len(subscribers) == 0 {
+			delete(a.serverSubscribers, serverID)
+		}
+	}
+	return history, updates, unsubscribe
+}
+
+func sendLatestLogSnapshot(updates chan string, snapshot string) {
+	select {
+	case updates <- snapshot:
+	default:
+		select {
+		case <-updates:
+		default:
+		}
+		select {
+		case updates <- snapshot:
+		default:
+		}
+	}
+}
+
+func sendLatestLocalServerEvent(updates chan domain.LocalServerEvent, event domain.LocalServerEvent) {
+	select {
+	case updates <- event:
+	default:
+		select {
+		case <-updates:
+		default:
+		}
+		select {
+		case updates <- event:
+		default:
+		}
+	}
 }
 
 func (a *App) sendLocalServerCommand(serverID string, command string) error {
@@ -3063,6 +3243,21 @@ func writeJSON(w http.ResponseWriter, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
+func writeServerSentEvent(w io.Writer, event string, data []byte) error {
+	if event != "" {
+		if _, err := fmt.Fprintf(w, "event: %s\n", event); err != nil {
+			return err
+		}
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(w, "\n")
+	return err
+}
+
 func randomToken() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -3097,6 +3292,7 @@ func detachedLogsPageHTML(token string) string {
 const token = ` + jsonString(token) + `;
 const feed = document.getElementById('feed');
 const meta = document.getElementById('meta');
+let pollingTimer = 0;
 function esc(value){return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
 function render(data){
   const logs = Array.isArray(data.logs) ? data.logs : [];
@@ -3114,8 +3310,20 @@ async function refresh(){
     feed.innerHTML = '<p class="empty">' + esc(error.message || error) + '</p>';
   }
 }
-refresh();
-setInterval(refresh, 1000);
+function startPolling(){
+  if (pollingTimer) return;
+  refresh();
+  pollingTimer = setInterval(refresh, 1000);
+}
+function connectStream(){
+  if (!window.EventSource) { startPolling(); return; }
+  const source = new EventSource('/api/logs/stream?token=' + encodeURIComponent(token));
+  source.addEventListener('snapshot', event => {
+    try { render(JSON.parse(event.data)); } catch (error) { meta.textContent = 'Update failed'; }
+  });
+  source.onerror = () => { source.close(); startPolling(); };
+}
+connectStream();
 </script>
 </body>
 </html>`
@@ -3144,6 +3352,8 @@ const terminal = document.getElementById('terminal');
 const form = document.getElementById('composer');
 const commandInput = document.getElementById('command');
 let lastRendered = '';
+let terminalEvents = [];
+let pollingTimer = 0;
 function esc(value){return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
 function lineKey(event){return [event.time,event.stream,event.status,event.message,event.exitCode].join('|');}
 function render(events){
@@ -3159,10 +3369,30 @@ async function refresh(){
     const response = await fetch('/api/server/' + serverID + '/history?token=' + encodeURIComponent(token), {cache:'no-store'});
     if (!response.ok) throw new Error(await response.text());
     const data = await response.json();
-    render(Array.isArray(data.events) ? data.events : []);
+    terminalEvents = Array.isArray(data.events) ? data.events : [];
+    render(terminalEvents);
   } catch (error) {
     terminal.innerHTML = '<p class="hint">' + esc(error.message || error) + '</p>';
   }
+}
+function startPolling(){
+  if (pollingTimer) return;
+  refresh();
+  pollingTimer = setInterval(refresh, 750);
+}
+function connectStream(){
+  if (!window.EventSource) { startPolling(); return; }
+  const source = new EventSource('/api/server/' + serverID + '/stream?token=' + encodeURIComponent(token));
+  source.addEventListener('history', event => {
+    const data = JSON.parse(event.data);
+    terminalEvents = Array.isArray(data.events) ? data.events : [];
+    render(terminalEvents);
+  });
+  source.addEventListener('server-event', event => {
+    terminalEvents = [...terminalEvents, JSON.parse(event.data)].slice(-1000);
+    render(terminalEvents);
+  });
+  source.onerror = () => { source.close(); startPolling(); };
 }
 form.addEventListener('submit', async event => {
   event.preventDefault();
@@ -3177,8 +3407,7 @@ form.addEventListener('submit', async event => {
     alert(error.message || error);
   }
 });
-refresh();
-setInterval(refresh, 750);
+connectStream();
 commandInput.focus();
 </script>
 </body>

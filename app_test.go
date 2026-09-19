@@ -91,6 +91,64 @@ func TestSendLocalServerStopCommandMarksStopping(t *testing.T) {
 	}
 }
 
+func TestSubscribeLogSnapshotsReceivesInitialAndUpdates(t *testing.T) {
+	app := NewApp()
+	if err := app.setLogsSnapshot(`{"logs":[{"id":"initial"}],"profiles":[],"localServers":[]}`); err != nil {
+		t.Fatalf("set initial snapshot: %v", err)
+	}
+
+	snapshot, updates, unsubscribe := app.subscribeLogSnapshots()
+	defer unsubscribe()
+	if !strings.Contains(snapshot, "initial") {
+		t.Fatalf("expected initial snapshot, got %s", snapshot)
+	}
+
+	if err := app.setLogsSnapshot(`{"logs":[{"id":"updated"}],"profiles":[],"localServers":[]}`); err != nil {
+		t.Fatalf("set updated snapshot: %v", err)
+	}
+	select {
+	case got := <-updates:
+		if !strings.Contains(got, "updated") {
+			t.Fatalf("expected updated snapshot, got %s", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for snapshot update")
+	}
+}
+
+func TestSubscribeLocalServerEventsReceivesHistoryAndLiveUpdates(t *testing.T) {
+	app := NewApp()
+	serverID := "server-1"
+	app.recordLocalServerEvent(domain.LocalServerEvent{
+		ServerID: serverID,
+		Status:   domain.LaunchStarting,
+		Message:  "starting",
+		Time:     "2026-09-19T12:00:00Z",
+	})
+
+	history, updates, unsubscribe := app.subscribeLocalServerEvents(serverID)
+	defer unsubscribe()
+	if len(history) != 1 || history[0].Message != "starting" {
+		t.Fatalf("unexpected history: %#v", history)
+	}
+
+	app.recordLocalServerEvent(domain.LocalServerEvent{
+		ServerID: serverID,
+		Status:   domain.LaunchRunning,
+		Stream:   "stdout",
+		Message:  "ready",
+		Time:     "2026-09-19T12:00:01Z",
+	})
+	select {
+	case got := <-updates:
+		if got.Message != "ready" || got.Stream != "stdout" {
+			t.Fatalf("unexpected live event: %#v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for live server event")
+	}
+}
+
 func TestModrinthDependencySelectionMatchesVersionProjectOrFile(t *testing.T) {
 	selected := selectedModrinthDependencyMap([]string{"version-1", "project-2", "mod-3.jar"})
 

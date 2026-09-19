@@ -443,17 +443,19 @@ function App() {
             if (!event?.profileId) {
                 return;
             }
-            setLaunchStates((current) => ({
-                ...current,
-                [event.profileId]: {
-                    profileId: event.profileId,
-                    status: event.status,
-                    message: event.message,
-                    exitCode: event.exitCode,
-                    endedAt: event.status === 'stopped' || event.status === 'failed' ? event.time : current[event.profileId]?.endedAt,
-                    startedAt: current[event.profileId]?.startedAt ?? event.time,
-                },
-            }));
+            if (!event.stream) {
+                setLaunchStates((current) => ({
+                    ...current,
+                    [event.profileId]: {
+                        profileId: event.profileId,
+                        status: event.status,
+                        message: event.message,
+                        exitCode: event.exitCode,
+                        endedAt: event.status === 'stopped' || event.status === 'failed' ? event.time : current[event.profileId]?.endedAt,
+                        startedAt: current[event.profileId]?.startedAt ?? event.time,
+                    },
+                }));
+            }
             appendLog({
                 level: event.status === 'failed' ? 'error' : event.status === 'stopped' ? 'success' : 'info',
                 source: event.stream ? `Game ${event.stream}` : 'Launch',
