@@ -2,6 +2,8 @@
 
 Use these checks after a package artifact has been built locally or downloaded from GitHub Actions.
 
+For real desktop UI checks driven through VM screenshots and clicks, use `docs/launcher-ui-smoke-tests.md`.
+
 ## Linux
 
 - AppImage: run `./power-mine-<version>-linux-x86_64.appimage headless create-profile --name Smoke --loader vanilla --minecraft-version 1.20.1` with `POWER_MINE_DATA_DIR` pointed at a temporary directory.
