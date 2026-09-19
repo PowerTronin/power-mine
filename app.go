@@ -804,15 +804,7 @@ func (a *App) OpenDetachedLogsWindow(snapshot string) error {
 	if err := a.ensureReady(); err != nil {
 		return err
 	}
-	if err := a.setLogsSnapshot(snapshot); err != nil {
-		return err
-	}
-	openURL, err := a.externalWindowURL("/logs")
-	if err != nil {
-		return err
-	}
-	wailsruntime.BrowserOpenURL(a.ctx, openURL)
-	return nil
+	return a.setLogsSnapshot(snapshot)
 }
 
 func (a *App) SyncDetachedLogsWindow(snapshot string) error {
@@ -829,12 +821,17 @@ func (a *App) OpenLocalServerTerminal(id string) error {
 	if _, err := a.serverService.Get(id); err != nil {
 		return err
 	}
-	openURL, err := a.externalWindowURL("/server-terminal/" + url.PathEscape(id))
-	if err != nil {
+	return nil
+}
+
+func (a *App) SendLocalServerCommand(id string, command string) error {
+	if err := a.ensureReady(); err != nil {
 		return err
 	}
-	wailsruntime.BrowserOpenURL(a.ctx, openURL)
-	return nil
+	if _, err := a.serverService.Get(id); err != nil {
+		return err
+	}
+	return a.sendLocalServerCommand(id, command)
 }
 
 func (a *App) SearchModrinthMods(profileID string, query string) (domain.ModrinthSearchResult, error) {

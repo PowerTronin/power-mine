@@ -1,4 +1,4 @@
-import {lazy, Suspense, useEffect, useMemo, useState, type FormEvent} from 'react';
+import {lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent} from 'react';
 import './App.css';
 import {
     AppInfo,
@@ -29,10 +29,8 @@ import {
     ListProfileMods,
     ListProfiles,
     ListLocalServers,
-    OpenDetachedLogsWindow,
     OpenLocalServerFolder,
     OpenLocalServerSettings,
-    OpenLocalServerTerminal,
     OpenProfileModsFolder,
     OpenProfileLogsFolder,
     PlanModrinthInstall,
@@ -49,10 +47,10 @@ import {
     SaveSettings,
     SearchModrinthMods,
     SelectProfile,
+    SendLocalServerCommand,
     SetProfileModEnabled,
     StartLocalServer,
     StopLocalServer,
-    SyncDetachedLogsWindow,
     UpdateModrinthModFile,
     UpdateModrinthModFiles,
     UpdateModrinthModVersionFiles,
@@ -221,6 +219,8 @@ const defaultAccount: AccountDraft = {
     offlineUuid: '',
 };
 
+const MAX_LOCAL_SERVER_TERMINAL_EVENTS = 1000;
+
 function App() {
     const [screen, setScreen] = useState<Screen>('home');
     const [info, setInfo] = useState<domain.AppInfo | null>(null);
@@ -252,7 +252,10 @@ function App() {
     const [profileSettingsDraft, setProfileSettingsDraft] = useState<ProfileSettingsDraft | null>(null);
     const [modActionKey, setModActionKey] = useState('');
     const [gameLogActionKey, setGameLogActionKey] = useState('');
-    const [detachedLogsActive, setDetachedLogsActive] = useState(false);
+    const [logsWindowOpen, setLogsWindowOpen] = useState(false);
+    const [terminalServerId, setTerminalServerId] = useState('');
+    const [serverTerminalActionKey, setServerTerminalActionKey] = useState('');
+    const [localServerTerminalEvents, setLocalServerTerminalEvents] = useState<Record<string, LocalServerEvent[]>>({});
     const [browseProfileId, setBrowseProfileId] = useState('');
     const [browseQuery, setBrowseQuery] = useState('');
     const [browseResults, setBrowseResults] = useState<domain.ModrinthSearchResult | null>(null);
@@ -298,6 +301,10 @@ function App() {
     const settingsLocalServer = useMemo(
         () => localServers.find((server) => server.id === localServerSettingsId),
         [localServers, localServerSettingsId]
+    );
+    const terminalLocalServer = useMemo(
+        () => localServers.find((server) => server.id === terminalServerId),
+        [localServers, terminalServerId]
     );
     const settingsProfileModList = settingsProfile ? profileModLists[settingsProfile.id] : undefined;
     const settingsProfileUpdatePlans = settingsProfile ? modrinthUpdatePlans[settingsProfile.id] ?? [] : [];
@@ -477,6 +484,13 @@ function App() {
             if (!event?.serverId) {
                 return;
             }
+            setLocalServerTerminalEvents((current) => {
+                const events = [...(current[event.serverId] ?? []), event].slice(-MAX_LOCAL_SERVER_TERMINAL_EVENTS);
+                return {
+                    ...current,
+                    [event.serverId]: events,
+                };
+            });
             if (!event.stream) {
                 setLocalServerRunStates((current) => ({
                     ...current,
@@ -500,18 +514,13 @@ function App() {
     }, []);
 
     useEffect(() => {
-        if (!detachedLogsActive) {
+        if (!terminalServerId) {
             return;
         }
-        void SyncDetachedLogsWindow(detachedLogsSnapshot(launcherLogs, profiles, localServers)).catch((err) => {
-            appendLog({
-                level: 'error',
-                source: 'Logs',
-                message: `Detached logs sync failed: ${errorText(err)}`,
-            });
-            setDetachedLogsActive(false);
-        });
-    }, [detachedLogsActive, launcherLogs, profiles, localServers]);
+        if (!localServers.some((server) => server.id === terminalServerId)) {
+            setTerminalServerId('');
+        }
+    }, [terminalServerId, localServers]);
 
     function appendLog(entry: Omit<LauncherLog, 'id' | 'time'>) {
         const next: LauncherLog = {
@@ -522,25 +531,14 @@ function App() {
         setLauncherLogs((current) => [next, ...current]);
     }
 
-    async function openDetachedLogsWindow() {
-        try {
-            setError('');
-            await OpenDetachedLogsWindow(detachedLogsSnapshot(launcherLogs, profiles, localServers));
-            setDetachedLogsActive(true);
-            appendLog({
-                level: 'success',
-                source: 'Logs',
-                message: 'Detached logs window opened.',
-            });
-        } catch (err) {
-            const text = errorText(err);
-            setError(text);
-            appendLog({
-                level: 'error',
-                source: 'Logs',
-                message: `Detached logs window failed: ${text}`,
-            });
-        }
+    function openDetachedLogsWindow() {
+        setError('');
+        setLogsWindowOpen(true);
+        appendLog({
+            level: 'success',
+            source: 'Logs',
+            message: logsWindowOpen ? 'Detached logs window focused.' : 'Detached logs window opened.',
+        });
     }
 
     async function refreshApp() {
@@ -1159,15 +1157,28 @@ function App() {
         setLocalServerSettingsId('');
     }
 
-    async function openLocalServerTerminal(id: string) {
+    function openLocalServerTerminal(id: string) {
+        setError('');
+        setSelectedLocalServerId(id);
+        setTerminalServerId(id);
+        appendLog({
+            level: 'success',
+            source: 'Server terminal',
+            message: terminalServerId === id ? 'Local server terminal focused.' : 'Local server terminal opened.',
+            serverId: id,
+        });
+    }
+
+    async function sendLocalServerTerminalCommand(id: string, command: string) {
+        const action = `${id}:terminal-command`;
         try {
             setError('');
-            setLocalServerActionKey(`${id}:terminal`);
-            await OpenLocalServerTerminal(id);
+            setServerTerminalActionKey(action);
+            await SendLocalServerCommand(id, command);
             appendLog({
                 level: 'success',
                 source: 'Server terminal',
-                message: 'Local server terminal opened.',
+                message: `Command sent: ${command}`,
                 serverId: id,
             });
         } catch (err) {
@@ -1176,11 +1187,12 @@ function App() {
             appendLog({
                 level: 'error',
                 source: 'Server terminal',
-                message: `Open local server terminal failed: ${text}`,
+                message: `Send local server command failed: ${text}`,
                 serverId: id,
             });
+            throw err;
         } finally {
-            setLocalServerActionKey('');
+            setServerTerminalActionKey((current) => current === action ? '' : current);
         }
     }
 
@@ -2979,6 +2991,24 @@ function App() {
                             : pendingModrinthUpdate.currentFileName)}
                         onCancel={cancelPendingModrinthUpdate}
                         onConfirm={confirmPendingModrinthUpdate}
+                    />
+                )}
+                {logsWindowOpen && (
+                    <DetachedLogsWindow
+                        logs={launcherLogs}
+                        profiles={profiles}
+                        localServers={localServers}
+                        onClose={() => setLogsWindowOpen(false)}
+                    />
+                )}
+                {terminalLocalServer && (
+                    <ServerTerminalWindow
+                        server={terminalLocalServer}
+                        events={localServerTerminalEvents[terminalLocalServer.id] ?? []}
+                        run={localServerRunStates[terminalLocalServer.id]}
+                        actionKey={serverTerminalActionKey}
+                        onClose={() => setTerminalServerId('')}
+                        onSendCommand={sendLocalServerTerminalCommand}
                     />
                 )}
             </main>
@@ -5535,7 +5565,7 @@ function ClassicLogsPanel({
                         <p>{filteredLogs.length} visible events{errorCount > 0 ? ` / ${errorCount} errors` : ''}</p>
                     </div>
                     <div className="logs-actions">
-                        {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open detached window</button>}
+                        {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open app window</button>}
                         <button
                             type="button"
                             disabled={!exportProfile || gameLogActionKey === `${exportProfile?.id}:logs:export`}
@@ -5612,7 +5642,7 @@ function ClassicLogsPanel({
                                 <p>{gameLogStatusText(gameProfile, gameLogList, selectedGameContent, liveGameLogs, gameFileName)}</p>
                             </div>
                             <div className="logs-actions">
-                                {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open detached window</button>}
+                                {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open app window</button>}
                                 <button type="button" disabled={!gameProfile} onClick={copyGameLog}>Copy visible</button>
                                 <button
                                     type="button"
@@ -5697,6 +5727,169 @@ function ClassicLogsPanel({
                 )}
             </section>
         </section>
+    );
+}
+
+function DetachedLogsWindow({
+    logs,
+    profiles,
+    localServers,
+    onClose
+}: {
+    logs: LauncherLog[];
+    profiles: domain.Profile[];
+    localServers: domain.LocalServer[];
+    onClose: () => void;
+}) {
+    const [copyStatus, setCopyStatus] = useState('');
+    const profilesById = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile])), [profiles]);
+    const localServersById = useMemo(() => new Map(localServers.map((server) => [server.id, server])), [localServers]);
+    const visibleLogs = useMemo(() => logs.slice(0, 1000), [logs]);
+    const errorCount = visibleLogs.filter((log) => log.level === 'error').length;
+
+    async function copyLogs() {
+        if (visibleLogs.length === 0) {
+            setCopyStatus('Nothing to copy');
+            return;
+        }
+        const text = [...visibleLogs]
+            .reverse()
+            .map((log) => formatLauncherLogLine(log, profilesById, localServersById))
+            .join('\n');
+        try {
+            if (!navigator.clipboard?.writeText) {
+                throw new Error('Clipboard is unavailable');
+            }
+            await navigator.clipboard.writeText(text);
+            setCopyStatus('Copied');
+        } catch (err) {
+            setCopyStatus(errorText(err));
+        }
+    }
+
+    return (
+        <div className="app-window-backdrop" role="presentation">
+            <section className="app-window logs-window" role="dialog" aria-modal="false" aria-labelledby="detached-logs-title">
+                <div className="app-window-titlebar">
+                    <div>
+                        <p className="eyebrow">App-owned window</p>
+                        <h2 id="detached-logs-title">Detached logs</h2>
+                        <p>{visibleLogs.length} visible events{errorCount > 0 ? ` / ${errorCount} errors` : ''}</p>
+                    </div>
+                    <div className="app-window-actions">
+                        <button type="button" onClick={copyLogs} disabled={visibleLogs.length === 0}>Copy</button>
+                        <button type="button" onClick={onClose}>Close</button>
+                    </div>
+                </div>
+                {copyStatus && <p className="app-window-status">{copyStatus}</p>}
+                <div className="app-window-log-feed" role="log" aria-live="polite">
+                    {visibleLogs.length === 0 ? (
+                        <p className="logs-empty">No launcher events yet.</p>
+                    ) : (
+                        visibleLogs.map((log) => (
+                            <div key={log.id} className={`app-window-log-line ${log.level}`}>
+                                <span className="log-line-time">{log.time}</span>
+                                <span className="log-line-level">{log.level}</span>
+                                <span className="log-line-source">{log.source}</span>
+                                <span className="log-line-profile">{logProfileLabel(log, profilesById, localServersById)}</span>
+                                <span className="log-line-message">{log.message}</span>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </section>
+        </div>
+    );
+}
+
+function ServerTerminalWindow({
+    server,
+    events,
+    run,
+    actionKey,
+    onClose,
+    onSendCommand
+}: {
+    server: domain.LocalServer;
+    events: LocalServerEvent[];
+    run?: LocalServerRunState;
+    actionKey: string;
+    onClose: () => void;
+    onSendCommand: (id: string, command: string) => Promise<void>;
+}) {
+    const [command, setCommand] = useState('');
+    const [status, setStatus] = useState('');
+    const terminalRef = useRef<HTMLDivElement | null>(null);
+    const sending = actionKey === `${server.id}:terminal-command`;
+
+    useEffect(() => {
+        setCommand('');
+        setStatus('');
+    }, [server.id]);
+
+    useEffect(() => {
+        if (terminalRef.current) {
+            terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+        }
+    }, [events.length, server.id]);
+
+    async function submitCommand(event: FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+        const nextCommand = command.trim();
+        if (!nextCommand || sending) {
+            return;
+        }
+        setCommand('');
+        setStatus('');
+        try {
+            await onSendCommand(server.id, nextCommand);
+            setStatus('Sent');
+        } catch (err) {
+            setStatus(errorText(err));
+        }
+    }
+
+    return (
+        <div className="app-window-backdrop terminal-backdrop" role="presentation">
+            <section className="app-window terminal-window" role="dialog" aria-modal="false" aria-labelledby="server-terminal-title">
+                <div className="app-window-titlebar">
+                    <div>
+                        <p className="eyebrow">Server terminal</p>
+                        <h2 id="server-terminal-title">{server.name}</h2>
+                        <p>{server.minecraftVersion} / port {server.port}{run ? ` / ${localServerRunStatusText(run)}` : ''}</p>
+                    </div>
+                    <button type="button" onClick={onClose}>Close</button>
+                </div>
+                <div className="terminal-feed" ref={terminalRef} role="log" aria-live="polite">
+                    {events.length === 0 ? (
+                        <p className="logs-empty">No server output yet. Start the server, then keep this terminal open.</p>
+                    ) : (
+                        events.map((event, index) => (
+                            <div key={`${event.time}-${event.stream}-${index}`} className={`terminal-event-line ${event.status} ${event.stream || 'event'}`}>
+                                <span className="terminal-time">{(event.time || '').slice(11, 19) || '--:--:--'}</span>
+                                <span className="terminal-status">{event.status}</span>
+                                <span className="terminal-stream">{event.stream || 'event'}</span>
+                                <span className="terminal-message">{event.message}{event.exitCode !== undefined ? ` (exit ${event.exitCode})` : ''}</span>
+                            </div>
+                        ))
+                    )}
+                </div>
+                <form className="terminal-composer" onSubmit={submitCommand}>
+                    <span aria-hidden="true">&gt;</span>
+                    <input
+                        value={command}
+                        disabled={sending}
+                        autoFocus
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="server command, e.g. say Hello or stop"
+                        onChange={(event) => setCommand(event.target.value)}
+                    />
+                    <button type="submit" disabled={sending || command.trim() === ''}>{sending ? 'Sending' : 'Send'}</button>
+                </form>
+                {status && <p className="app-window-status terminal-status-line">{status}</p>}
+            </section>
+        </div>
     );
 }
 
@@ -5804,21 +5997,6 @@ function launcherLogExportText(logs: LauncherLog[], profiles: domain.Profile[], 
     const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
     const localServersById = new Map(localServers.map((server) => [server.id, server]));
     return [...logs].reverse().map((log) => formatLauncherLogLine(log, profilesById, localServersById)).join('\n');
-}
-
-function detachedLogsSnapshot(logs: LauncherLog[], profiles: domain.Profile[], localServers: domain.LocalServer[] = []) {
-    const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
-    const localServersById = new Map(localServers.map((server) => [server.id, server]));
-    return JSON.stringify({
-        updatedAt: new Date().toISOString(),
-        logs: logs.slice(0, 1000).map((log) => ({
-            time: log.time,
-            level: log.level,
-            source: log.source,
-            target: logProfileLabel(log, profilesById, localServersById),
-            message: log.message,
-        })),
-    });
 }
 
 function logExportMessage(result: domain.LogExportResult) {

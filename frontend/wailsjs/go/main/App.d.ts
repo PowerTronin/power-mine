@@ -112,6 +112,8 @@ export function SearchModrinthMods(arg1:string,arg2:string):Promise<domain.Modri
 
 export function SelectProfile(arg1:string):Promise<domain.ProfileList>;
 
+export function SendLocalServerCommand(arg1:string,arg2:string):Promise<void>;
+
 export function SetProfileModEnabled(arg1:string,arg2:string,arg3:boolean):Promise<domain.ModList>;
 
 export function StartLocalServer(arg1:string):Promise<domain.LocalServerRunState>;

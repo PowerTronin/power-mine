@@ -222,6 +222,10 @@ export function SelectProfile(arg1) {
   return window['go']['main']['App']['SelectProfile'](arg1);
 }
 
+export function SendLocalServerCommand(arg1, arg2) {
+  return window['go']['main']['App']['SendLocalServerCommand'](arg1, arg2);
+}
+
 export function SetProfileModEnabled(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetProfileModEnabled'](arg1, arg2, arg3);
 }
