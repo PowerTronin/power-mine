@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,10 +11,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"power-mine/internal/platform"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -29,6 +33,12 @@ const (
 	nativeWindowHeightEnv     = "POWER_MINE_NATIVE_WINDOW_HEIGHT"
 	nativeWindowFocusAddrEnv  = "POWER_MINE_NATIVE_WINDOW_FOCUS_ADDR"
 	nativeWindowFocusTokenEnv = "POWER_MINE_NATIVE_WINDOW_FOCUS_TOKEN"
+	nativeWindowPlacementEnv  = "POWER_MINE_NATIVE_WINDOW_PLACEMENT_FILE"
+)
+
+const (
+	nativeWindowPlacementApplyDelay       = 300 * time.Millisecond
+	nativeWindowPlacementAutosaveInterval = 750 * time.Millisecond
 )
 
 type nativeWindowConfig struct {
@@ -38,6 +48,7 @@ type nativeWindowConfig struct {
 	height     int
 	focusAddr  string
 	focusToken string
+	placement  string
 }
 
 type nativeWindowProcess struct {
@@ -56,8 +67,13 @@ func runNativeWindow() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	windowRuntime := &nativeWindowRuntime{
+		focus:     focusControl,
+		placement: nativeWindowPlacementStore{path: config.placement, defaultWidth: config.width, defaultHeight: config.height},
+		watchdog:  newWindowCloseExitWatchdog(2*time.Second, os.Exit),
+	}
+	focusControl.setOnFocus(windowRuntime.focusWindow)
 	defer focusControl.shutdown(context.Background())
-	exitWatchdog := newWindowCloseExitWatchdog(2*time.Second, os.Exit)
 
 	err = wails.Run(&options.App{
 		Title:     config.title,
@@ -69,9 +85,10 @@ func runNativeWindow() int {
 			Handler: newNativeWindowProxyHandler(config.target),
 		},
 		BackgroundColour: &options.RGBA{R: 5, G: 5, B: 5, A: 1},
-		OnStartup:        focusControl.setContext,
-		OnShutdown:       focusControl.shutdown,
-		OnBeforeClose:    exitWatchdog.beforeClose,
+		OnStartup:        windowRuntime.startup,
+		OnDomReady:       windowRuntime.domReady,
+		OnShutdown:       windowRuntime.shutdown,
+		OnBeforeClose:    windowRuntime.beforeClose,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err.Error())
@@ -104,6 +121,7 @@ func nativeWindowConfigFromEnv() (nativeWindowConfig, error) {
 		height:     nativeWindowEnvInt(nativeWindowHeightEnv, 720),
 		focusAddr:  strings.TrimSpace(os.Getenv(nativeWindowFocusAddrEnv)),
 		focusToken: strings.TrimSpace(os.Getenv(nativeWindowFocusTokenEnv)),
+		placement:  strings.TrimSpace(os.Getenv(nativeWindowPlacementEnv)),
 	}, nil
 }
 
@@ -162,11 +180,12 @@ func newNativeWindowProxyHandler(target *url.URL) http.Handler {
 }
 
 type nativeWindowFocusControl struct {
-	addr   string
-	token  string
-	server *http.Server
-	mu     sync.RWMutex
-	ctx    context.Context
+	addr    string
+	token   string
+	server  *http.Server
+	mu      sync.RWMutex
+	ctx     context.Context
+	onFocus func(context.Context)
 }
 
 func newNativeWindowFocusControl(addr string, token string) *nativeWindowFocusControl {
@@ -204,6 +223,12 @@ func (c *nativeWindowFocusControl) setContext(ctx context.Context) {
 	c.mu.Unlock()
 }
 
+func (c *nativeWindowFocusControl) setOnFocus(fn func(context.Context)) {
+	c.mu.Lock()
+	c.onFocus = fn
+	c.mu.Unlock()
+}
+
 func (c *nativeWindowFocusControl) shutdown(ctx context.Context) {
 	if c.server == nil {
 		return
@@ -220,6 +245,7 @@ func (c *nativeWindowFocusControl) handleFocus(w http.ResponseWriter, r *http.Re
 	}
 	c.mu.RLock()
 	ctx := c.ctx
+	onFocus := c.onFocus
 	c.mu.RUnlock()
 	if ctx == nil {
 		http.Error(w, "native window is not ready", http.StatusServiceUnavailable)
@@ -227,10 +253,237 @@ func (c *nativeWindowFocusControl) handleFocus(w http.ResponseWriter, r *http.Re
 	}
 	wailsruntime.WindowShow(ctx)
 	wailsruntime.WindowUnminimise(ctx)
+	if onFocus != nil {
+		onFocus(ctx)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *App) openNativeWindow(key string, targetURL string, title string, width int, height int) error {
+type nativeWindowRuntime struct {
+	mu             sync.Mutex
+	focus          *nativeWindowFocusControl
+	placement      nativeWindowPlacementStore
+	watchdog       *windowCloseExitWatchdog
+	autosaveCancel context.CancelFunc
+	stopping       bool
+}
+
+func (r *nativeWindowRuntime) startup(ctx context.Context) {
+	if r.focus != nil {
+		r.focus.setContext(ctx)
+	}
+}
+
+func (r *nativeWindowRuntime) domReady(ctx context.Context) {
+	r.focusWindow(ctx)
+	r.startAutosaveAfter(ctx, 2*nativeWindowPlacementApplyDelay)
+}
+
+func (r *nativeWindowRuntime) shutdown(ctx context.Context) {
+	r.markStopping()
+	r.stopAutosave()
+	if r.focus != nil {
+		r.focus.shutdown(ctx)
+	}
+}
+
+func (r *nativeWindowRuntime) beforeClose(ctx context.Context) bool {
+	r.markStopping()
+	r.stopAutosave()
+	if r.watchdog == nil {
+		return false
+	}
+	return r.watchdog.beforeClose(ctx)
+}
+
+func (r *nativeWindowRuntime) focusWindow(ctx context.Context) {
+	r.placement.apply(ctx)
+	r.placement.applyDelayed(ctx, nativeWindowPlacementApplyDelay)
+}
+
+func (r *nativeWindowRuntime) startAutosaveAfter(ctx context.Context, delay time.Duration) {
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		<-timer.C
+		if r.isStopping() {
+			return
+		}
+		r.setAutosaveCancel(r.placement.startAutosave(ctx, nativeWindowPlacementAutosaveInterval))
+	}()
+}
+
+func (r *nativeWindowRuntime) markStopping() {
+	r.mu.Lock()
+	r.stopping = true
+	r.mu.Unlock()
+}
+
+func (r *nativeWindowRuntime) isStopping() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopping
+}
+
+func (r *nativeWindowRuntime) setAutosaveCancel(cancel context.CancelFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopping {
+		if cancel != nil {
+			cancel()
+		}
+		return
+	}
+	if r.autosaveCancel != nil {
+		r.autosaveCancel()
+	}
+	r.autosaveCancel = cancel
+}
+
+func (r *nativeWindowRuntime) stopAutosave() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.autosaveCancel == nil {
+		return
+	}
+	r.autosaveCancel()
+	r.autosaveCancel = nil
+}
+
+type nativeWindowPlacementStore struct {
+	path          string
+	defaultWidth  int
+	defaultHeight int
+}
+
+type nativeWindowPlacement struct {
+	X      int `json:"x"`
+	Y      int `json:"y"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+func (s nativeWindowPlacementStore) apply(ctx context.Context) {
+	placement, ok := readNativeWindowPlacement(s.path)
+	if !ok {
+		return
+	}
+	wailsruntime.WindowSetSize(ctx, placement.Width, placement.Height)
+	wailsruntime.WindowSetPosition(ctx, placement.X, placement.Y)
+}
+
+func (s nativeWindowPlacementStore) applyDelayed(ctx context.Context, delay time.Duration) {
+	if delay <= 0 {
+		s.apply(ctx)
+		return
+	}
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		<-timer.C
+		s.apply(ctx)
+	}()
+}
+
+func (s nativeWindowPlacementStore) startAutosave(ctx context.Context, interval time.Duration) context.CancelFunc {
+	if strings.TrimSpace(s.path) == "" || ctx == nil || interval <= 0 {
+		return nil
+	}
+	autosaveCtx, cancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		var last nativeWindowPlacement
+		var hasLast bool
+		for {
+			select {
+			case <-autosaveCtx.Done():
+				return
+			case <-ticker.C:
+				placement, ok := s.current(ctx)
+				if !ok || hasLast && placement == last {
+					continue
+				}
+				if err := s.write(placement); err != nil {
+					continue
+				}
+				last = placement
+				hasLast = true
+			}
+		}
+	}()
+	return cancel
+}
+
+func (s nativeWindowPlacementStore) current(ctx context.Context) (nativeWindowPlacement, bool) {
+	if strings.TrimSpace(s.path) == "" || ctx == nil {
+		return nativeWindowPlacement{}, false
+	}
+	if !wailsruntime.WindowIsNormal(ctx) {
+		return nativeWindowPlacement{}, false
+	}
+	width, height := wailsruntime.WindowGetSize(ctx)
+	x, y := wailsruntime.WindowGetPosition(ctx)
+	placement := nativeWindowPlacement{X: x, Y: y, Width: width, Height: height}
+	if !placement.valid() {
+		return nativeWindowPlacement{}, false
+	}
+	return placement, true
+}
+
+func (s nativeWindowPlacementStore) write(placement nativeWindowPlacement) error {
+	if existing, ok := readNativeWindowPlacement(s.path); ok && existing != placement && s.looksLikeClosingFallback(placement) {
+		return nil
+	}
+	return writeNativeWindowPlacement(s.path, placement)
+}
+
+func (s nativeWindowPlacementStore) looksLikeClosingFallback(placement nativeWindowPlacement) bool {
+	if s.defaultWidth <= 0 || s.defaultHeight <= 0 {
+		return false
+	}
+	return placement.Width == s.defaultWidth && placement.Height == s.defaultHeight && placement.X >= 0 && placement.X <= 16 && placement.Y >= 0 && placement.Y <= 80
+}
+
+func readNativeWindowPlacement(path string) (nativeWindowPlacement, bool) {
+	if strings.TrimSpace(path) == "" {
+		return nativeWindowPlacement{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nativeWindowPlacement{}, false
+	}
+	var placement nativeWindowPlacement
+	if err := json.Unmarshal(data, &placement); err != nil || !placement.valid() {
+		return nativeWindowPlacement{}, false
+	}
+	return placement, true
+}
+
+func writeNativeWindowPlacement(path string, placement nativeWindowPlacement) error {
+	if strings.TrimSpace(path) == "" || !placement.valid() {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(placement, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func (p nativeWindowPlacement) valid() bool {
+	return p.Width >= 640 && p.Height >= 420 && p.Width <= 10000 && p.Height <= 10000
+}
+
+func (a *App) openNativeWindow(key string, placementKey string, targetURL string, title string, width int, height int) error {
 	target, err := url.Parse(targetURL)
 	if err != nil {
 		return fmt.Errorf("parse native window target: %w", err)
@@ -247,6 +500,10 @@ func (a *App) openNativeWindow(key string, targetURL string, title string, width
 		return err
 	}
 	focusToken, err := randomToken()
+	if err != nil {
+		return err
+	}
+	placementPath, err := nativeWindowPlacementPath(placementKey)
 	if err != nil {
 		return err
 	}
@@ -273,6 +530,7 @@ func (a *App) openNativeWindow(key string, targetURL string, title string, width
 		nativeWindowHeightEnv+"="+strconv.Itoa(height),
 		nativeWindowFocusAddrEnv+"="+focusAddr,
 		nativeWindowFocusTokenEnv+"="+focusToken,
+		nativeWindowPlacementEnv+"="+placementPath,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -283,6 +541,37 @@ func (a *App) openNativeWindow(key string, targetURL string, title string, width
 	a.nativeWindows[key] = process
 	go a.waitNativeWindow(key, process)
 	return nil
+}
+
+func nativeWindowPlacementPath(placementKey string) (string, error) {
+	dataDir, err := platform.AppDataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dataDir, "native-windows", nativeWindowPlacementFilename(placementKey)+".json"), nil
+}
+
+func nativeWindowPlacementFilename(key string) string {
+	key = strings.TrimSpace(strings.ToLower(key))
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range key {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+			lastDash = false
+		case r == '-' || r == '_' || r == ':' || r == ' ':
+			if builder.Len() > 0 && !lastDash {
+				builder.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	filename := strings.Trim(builder.String(), "-")
+	if filename == "" {
+		return "native-window"
+	}
+	return filename
 }
 
 func reserveNativeWindowFocusAddr() (string, error) {

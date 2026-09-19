@@ -21,9 +21,11 @@ Main and helper windows also arm a close watchdog so window-manager close events
 
 Detached logs and server terminal now use server-sent events for live updates, with the previous HTTP polling kept only as a browser/runtime fallback. Terminal streams subscribe atomically with history capture so events cannot slip between the initial history response and live updates.
 
+Detached logs and server terminal now include utility-window controls for copying visible output, clearing the visible view, pausing follow mode, filtering streams, and showing connection/status chips. Native helper windows persist size and position per detached window type.
+
 Known follow-ups:
 
-- Milestone 3 detached window UX remains open: copy, clear visible output, auto-scroll controls, status chips, filters, and remembered placement.
+- Run manual visual smoke on Linux and Windows release builds before making detached native windows part of release acceptance.
 
 ## Product Decisions
 
@@ -76,12 +78,14 @@ Acceptance:
 
 Goal: make detached tools useful during real play/testing.
 
+Status: complete.
+
 Tasks:
 
-- Add copy, clear visible output, and auto-scroll controls.
-- Add status chips for Running, Starting, Stopped, and Failed.
-- Add lightweight filters for stdout, stderr, lifecycle, and commands.
-- Remember size and position per detached window type.
+- [x] Add copy, clear visible output, and auto-scroll controls.
+- [x] Add status chips for Running, Starting, Stopped, and Failed.
+- [x] Add lightweight filters for stdout, stderr, lifecycle, and commands.
+- [x] Remember size and position per detached window type.
 
 Acceptance:
 

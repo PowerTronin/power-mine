@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -113,6 +115,7 @@ func TestNativeWindowConfigReadsFocusEndpoint(t *testing.T) {
 	t.Setenv(nativeWindowHeightEnv, "700")
 	t.Setenv(nativeWindowFocusAddrEnv, "127.0.0.1:4321")
 	t.Setenv(nativeWindowFocusTokenEnv, "token")
+	t.Setenv(nativeWindowPlacementEnv, "/tmp/power-mine-placement.json")
 
 	config, err := nativeWindowConfigFromEnv()
 	if err != nil {
@@ -126,6 +129,9 @@ func TestNativeWindowConfigReadsFocusEndpoint(t *testing.T) {
 	}
 	if config.focusAddr != "127.0.0.1:4321" || config.focusToken != "token" {
 		t.Fatalf("unexpected focus config: %#v", config)
+	}
+	if config.placement != "/tmp/power-mine-placement.json" {
+		t.Fatalf("unexpected placement config: %#v", config)
 	}
 }
 
@@ -152,5 +158,103 @@ func TestValidateNativeWindowFocusAddrRequiresLoopbackIP(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestNativeWindowPlacementFilenameSanitizesKeys(t *testing.T) {
+	cases := map[string]string{
+		"logs":                "logs",
+		"server-terminal:abc": "server-terminal-abc",
+		"  Server Terminal  ": "server-terminal",
+		"../../bad path.json": "bad-pathjson",
+		"":                    "native-window",
+	}
+	for input, want := range cases {
+		if got := nativeWindowPlacementFilename(input); got != want {
+			t.Fatalf("nativeWindowPlacementFilename(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNativeWindowPlacementRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "placement.json")
+	want := nativeWindowPlacement{X: 11, Y: 22, Width: 900, Height: 700}
+	if err := writeNativeWindowPlacement(path, want); err != nil {
+		t.Fatalf("write placement: %v", err)
+	}
+	got, ok := readNativeWindowPlacement(path)
+	if !ok {
+		t.Fatal("expected placement to be readable")
+	}
+	if got != want {
+		t.Fatalf("unexpected placement: %#v", got)
+	}
+}
+
+func TestNativeWindowPlacementRejectsTinySize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "placement.json")
+	if err := writeNativeWindowPlacement(path, nativeWindowPlacement{Width: 100, Height: 100}); err != nil {
+		t.Fatalf("write invalid placement: %v", err)
+	}
+	if _, ok := readNativeWindowPlacement(path); ok {
+		t.Fatal("expected invalid placement to be ignored")
+	}
+}
+
+func TestNativeWindowPlacementStoreSkipsClosingFallback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "placement.json")
+	store := nativeWindowPlacementStore{path: path, defaultWidth: 1100, defaultHeight: 760}
+	want := nativeWindowPlacement{X: 320, Y: 160, Width: 900, Height: 620}
+	if err := writeNativeWindowPlacement(path, want); err != nil {
+		t.Fatalf("write placement: %v", err)
+	}
+
+	if err := store.write(nativeWindowPlacement{X: 0, Y: 35, Width: 1100, Height: 760}); err != nil {
+		t.Fatalf("write fallback placement: %v", err)
+	}
+	got, ok := readNativeWindowPlacement(path)
+	if !ok {
+		t.Fatal("expected placement to remain readable")
+	}
+	if got != want {
+		t.Fatalf("unexpected placement: %#v", got)
+	}
+}
+
+func TestNativeWindowPlacementStoreWritesRealDefaultPlacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "placement.json")
+	store := nativeWindowPlacementStore{path: path, defaultWidth: 1100, defaultHeight: 760}
+	want := nativeWindowPlacement{X: 420, Y: 222, Width: 1100, Height: 760}
+	if err := store.write(want); err != nil {
+		t.Fatalf("write placement: %v", err)
+	}
+	got, ok := readNativeWindowPlacement(path)
+	if !ok {
+		t.Fatal("expected placement to be readable")
+	}
+	if got != want {
+		t.Fatalf("unexpected placement: %#v", got)
+	}
+}
+
+func TestNativeWindowBeforeCloseStopsAutosave(t *testing.T) {
+	canceled := make(chan struct{})
+	runtime := &nativeWindowRuntime{
+		autosaveCancel: func() { close(canceled) },
+	}
+
+	if prevent := runtime.beforeClose(context.Background()); prevent {
+		t.Fatal("expected close to continue")
+	}
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("expected autosave to be stopped")
+	}
+	if !runtime.isStopping() {
+		t.Fatal("expected runtime to be marked stopping")
+	}
+	if runtime.autosaveCancel != nil {
+		t.Fatal("expected autosave cancel to be cleared")
 	}
 }

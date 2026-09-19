@@ -820,7 +820,7 @@ func (a *App) OpenDetachedLogsWindow(snapshot string) error {
 	if err != nil {
 		return err
 	}
-	return a.openNativeWindow("logs", targetURL, "Power Mine Logs", 1100, 760)
+	return a.openNativeWindow("logs", "logs", targetURL, "Power Mine Logs", 1100, 760)
 }
 
 func (a *App) SyncDetachedLogsWindow(snapshot string) error {
@@ -842,7 +842,7 @@ func (a *App) OpenLocalServerTerminal(id string) error {
 	if err != nil {
 		return err
 	}
-	return a.openNativeWindow("server-terminal:"+id, targetURL, "Power Mine Terminal - "+server.Name, 1000, 720)
+	return a.openNativeWindow("server-terminal:"+id, "server-terminal", targetURL, "Power Mine Terminal - "+server.Name, 1000, 720)
 }
 
 func (a *App) SendLocalServerCommand(id string, command string) error {
@@ -3282,23 +3282,63 @@ func detachedLogsPageHTML(token string) string {
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Power Mine Logs</title>
 <style>
-:root{color-scheme:dark;--bg:#050505;--panel:#121212;--surface:#0d0d0d;--text:#fff;--muted:rgb(255 255 255 / 70%);--border:#fff;--ok:#4ade80;--error:#f87171;font-family:"SFMono-Regular","Cascadia Code","Liberation Mono",Menlo,Consolas,monospace}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}header{position:sticky;top:0;z-index:1;border-bottom:2px solid var(--border);background:var(--panel);padding:16px 18px;display:flex;align-items:flex-end;justify-content:space-between;gap:18px}h1,p{margin:0}.eyebrow{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}h1{margin-top:6px;font-size:28px;letter-spacing:-.04em}.meta{color:var(--muted);font-size:12px;text-align:right}.feed{display:grid;gap:8px;padding:14px}.row{display:grid;grid-template-columns:86px 72px 150px 190px minmax(0,1fr);gap:10px;border:1px solid rgb(255 255 255 / 32%);background:var(--surface);padding:9px 10px}.row.success .level{color:var(--ok)}.row.error{border-color:var(--error);background:#1a0d0d}.row.error .level{color:var(--error)}.time,.source,.target{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.level{font-weight:800;text-transform:uppercase}.message{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}.empty{border:2px dashed rgb(255 255 255 / 40%);padding:24px;color:var(--muted)}@media(max-width:820px){header{display:block}.meta{text-align:left;margin-top:10px}.row{grid-template-columns:1fr}.time,.source,.target{white-space:normal}}
+:root{color-scheme:dark;--bg:#050505;--panel:#121212;--surface:#0d0d0d;--text:#fff;--muted:rgb(255 255 255 / 70%);--line:rgb(255 255 255 / 26%);--border:#fff;--ok:#4ade80;--warn:#facc15;--error:#f87171;--blue:#7dd3fc;font-family:"SFMono-Regular","Cascadia Code","Liberation Mono",Menlo,Consolas,monospace}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}header{position:sticky;top:0;z-index:2;border-bottom:2px solid var(--border);background:var(--panel);padding:16px 18px;display:flex;align-items:flex-end;justify-content:space-between;gap:18px}h1,p{margin:0}.eyebrow{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}h1{margin-top:6px;font-size:28px;letter-spacing:-.04em}.meta{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;color:var(--muted);font-size:12px;text-align:right}.chip{border:1px solid var(--line);border-radius:999px;padding:5px 8px;background:#050505;color:var(--muted);font-weight:800;text-transform:uppercase}.chip.live{color:var(--ok);border-color:var(--ok)}.chip.polling{color:var(--warn);border-color:var(--warn)}.chip.error{color:var(--error);border-color:var(--error)}.toolbar{position:sticky;top:82px;z-index:1;background:rgb(5 5 5 / 92%);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;flex-wrap:wrap;gap:8px}button{border:1px solid var(--line);background:#080808;color:var(--text);font:inherit;font-size:12px;font-weight:800;padding:8px 10px;cursor:pointer}button:hover,button.active{background:var(--text);color:var(--bg)}button.danger:hover{background:var(--error);border-color:var(--error);color:#150707}.feed{display:grid;gap:8px;padding:14px}.row{display:grid;grid-template-columns:86px 72px 132px 180px minmax(0,1fr);gap:10px;border:1px solid rgb(255 255 255 / 32%);background:var(--surface);padding:9px 10px}.row.success .level{color:var(--ok)}.row.error{border-color:var(--error);background:#1a0d0d}.row.error .level{color:var(--error)}.row.stdout .source{color:var(--ok)}.row.stderr .source{color:var(--error)}.row.commands .source{color:var(--blue)}.time,.source,.target{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.level{font-weight:800;text-transform:uppercase}.message{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}.empty{border:2px dashed rgb(255 255 255 / 40%);padding:24px;color:var(--muted)}@media(max-width:820px){header{display:block}.meta{justify-content:flex-start;text-align:left;margin-top:10px}.toolbar{position:static}.row{grid-template-columns:1fr}.time,.source,.target{white-space:normal}}
 </style>
 </head>
 <body>
-<header><div><p class="eyebrow">Power Mine</p><h1>Detached logs</h1></div><p class="meta" id="meta">Loading...</p></header>
+<header><div><p class="eyebrow">Power Mine</p><h1>Detached logs</h1></div><p class="meta"><span class="chip live" id="connectionChip">Live</span><span class="chip" id="countChip">Loading</span><span class="chip" id="updatedChip">Waiting</span></p></header>
+<nav class="toolbar" aria-label="Log controls"><button class="active" data-filter="all" type="button">All</button><button data-filter="stdout" type="button">stdout</button><button data-filter="stderr" type="button">stderr</button><button data-filter="commands" type="button">commands</button><button data-filter="lifecycle" type="button">lifecycle</button><button data-filter="errors" type="button">errors</button><button id="followBtn" type="button">Follow on</button><button id="copyBtn" type="button">Copy visible</button><button class="danger" id="clearBtn" type="button">Clear visible</button></nav>
 <main class="feed" id="feed"><p class="empty">Waiting for launcher logs.</p></main>
 <script>
 const token = ` + jsonString(token) + `;
 const feed = document.getElementById('feed');
-const meta = document.getElementById('meta');
+const connectionChip = document.getElementById('connectionChip');
+const countChip = document.getElementById('countChip');
+const updatedChip = document.getElementById('updatedChip');
+const followBtn = document.getElementById('followBtn');
+const copyBtn = document.getElementById('copyBtn');
+const clearBtn = document.getElementById('clearBtn');
+const filterButtons = Array.from(document.querySelectorAll('[data-filter]'));
 let pollingTimer = 0;
+let latestData = {logs:[]};
+let activeFilter = 'all';
+let followLatest = true;
+let hiddenLogKeys = new Set();
 function esc(value){return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
+function logKey(log){return log.id || [log.time,log.level,log.source,log.message].join('|');}
+function logKind(log){
+  const source = String(log.source || '').toLowerCase();
+  if (source.includes('stdout')) return 'stdout';
+  if (source.includes('stderr')) return 'stderr';
+  if (source.includes('stdin') || source.includes('command')) return 'commands';
+  return 'lifecycle';
+}
+function matchesFilter(log){
+  if (activeFilter === 'all') return true;
+  if (activeFilter === 'errors') return log.level === 'error';
+  return logKind(log) === activeFilter;
+}
+function visibleLogs(){
+  const logs = Array.isArray(latestData.logs) ? latestData.logs : [];
+  const keys = new Set(logs.map(logKey));
+  hiddenLogKeys.forEach(key => { if (!keys.has(key)) hiddenLogKeys.delete(key); });
+  return logs.filter(log => !hiddenLogKeys.has(logKey(log)) && matchesFilter(log));
+}
+function setConnection(state){
+  connectionChip.textContent = state;
+  connectionChip.className = 'chip ' + state.toLowerCase();
+}
+function formatLog(log){return '[' + (log.time || '') + '] [' + String(log.level || '').toUpperCase() + '] [' + (log.source || '') + '] [' + (log.target || 'general') + '] ' + (log.message || '');}
 function render(data){
-  const logs = Array.isArray(data.logs) ? data.logs : [];
-  meta.innerHTML = esc(logs.length) + ' events<br/>Updated ' + esc(new Date().toLocaleTimeString());
-  if (logs.length === 0) { feed.innerHTML = '<p class="empty">No launcher events yet.</p>'; return; }
-  feed.innerHTML = logs.slice(0, 1000).map(log => '<article class="row '+esc(log.level)+'"><span class="time">'+esc(log.time)+'</span><span class="level">'+esc(log.level)+'</span><span class="source" title="'+esc(log.source)+'">'+esc(log.source)+'</span><span class="target" title="'+esc(log.target)+'">'+esc(log.target)+'</span><span class="message">'+esc(log.message)+'</span></article>').join('');
+  latestData = data || latestData;
+  const allLogs = Array.isArray(latestData.logs) ? latestData.logs : [];
+  const logs = visibleLogs();
+  const previousScroll = window.scrollY;
+  countChip.textContent = logs.length + ' visible / ' + allLogs.length + ' total';
+  updatedChip.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  if (logs.length === 0) { feed.innerHTML = '<p class="empty">' + (allLogs.length ? 'No launcher events match current filters.' : 'No launcher events yet.') + '</p>'; return; }
+  feed.innerHTML = logs.slice(0, 1000).map(log => '<article class="row '+esc(log.level)+' '+esc(logKind(log))+'"><span class="time">'+esc(log.time)+'</span><span class="level">'+esc(log.level)+'</span><span class="source" title="'+esc(log.source)+'">'+esc(log.source)+'</span><span class="target" title="'+esc(log.target || 'general')+'">'+esc(log.target || 'general')+'</span><span class="message">'+esc(log.message)+'</span></article>').join('');
+  if (followLatest) window.scrollTo({top:0,left:0,behavior:'auto'}); else window.scrollTo({top:previousScroll,left:0,behavior:'auto'});
 }
 async function refresh(){
   try {
@@ -3306,23 +3346,51 @@ async function refresh(){
     if (!response.ok) throw new Error(await response.text());
     render(await response.json());
   } catch (error) {
-    meta.textContent = 'Update failed';
+    setConnection('Error');
     feed.innerHTML = '<p class="empty">' + esc(error.message || error) + '</p>';
   }
 }
 function startPolling(){
   if (pollingTimer) return;
+  setConnection('Polling');
   refresh();
   pollingTimer = setInterval(refresh, 1000);
 }
 function connectStream(){
   if (!window.EventSource) { startPolling(); return; }
   const source = new EventSource('/api/logs/stream?token=' + encodeURIComponent(token));
+  source.onopen = () => setConnection('Live');
   source.addEventListener('snapshot', event => {
-    try { render(JSON.parse(event.data)); } catch (error) { meta.textContent = 'Update failed'; }
+    try { render(JSON.parse(event.data)); } catch (error) { setConnection('Error'); }
   });
   source.onerror = () => { source.close(); startPolling(); };
 }
+function setFilter(filter){
+  activeFilter = filter;
+  filterButtons.forEach(button => button.classList.toggle('active', button.dataset.filter === activeFilter));
+  render(latestData);
+}
+function setFollow(enabled){
+  followLatest = enabled;
+  followBtn.textContent = followLatest ? 'Follow on' : 'Follow paused';
+  followBtn.classList.toggle('active', followLatest);
+}
+async function writeClipboard(text){
+  if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); return; }
+  const area = document.createElement('textarea');
+  area.value = text;
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand('copy');
+  area.remove();
+}
+filterButtons.forEach(button => button.addEventListener('click', () => setFilter(button.dataset.filter)));
+followBtn.addEventListener('click', () => setFollow(!followLatest));
+copyBtn.addEventListener('click', async () => {
+  try { await writeClipboard(visibleLogs().slice().reverse().map(formatLog).join('\n')); copyBtn.textContent = 'Copied'; setTimeout(() => { copyBtn.textContent = 'Copy visible'; }, 900); } catch (error) { alert(error.message || error); }
+});
+clearBtn.addEventListener('click', () => { visibleLogs().forEach(log => hiddenLogKeys.add(logKey(log))); render(latestData); });
+setFollow(true);
 connectStream();
 </script>
 </body>
@@ -3338,11 +3406,12 @@ func serverTerminalPageHTML(token string, server domain.LocalServer) string {
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Power Mine Terminal - ` + html.EscapeString(server.Name) + `</title>
 <style>
-:root{color-scheme:dark;--bg:#020202;--panel:#101010;--ink:#f8f8f8;--muted:rgb(248 248 248 / 66%);--line:rgb(248 248 248 / 24%);--green:#7cff9b;--red:#ff7777;--blue:#77d7ff;font-family:"SFMono-Regular","Cascadia Code","Liberation Mono",Menlo,Consolas,monospace}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 20% 0%,#1d2b1f 0,#020202 34rem);color:var(--ink);display:grid;grid-template-rows:auto 1fr auto}header{border-bottom:1px solid var(--line);background:rgb(0 0 0 / 76%);padding:14px 16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}h1,p{margin:0}.eyebrow{color:var(--green);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}h1{margin-top:4px;font-size:23px}.meta{text-align:right;color:var(--muted);font-size:12px}.terminal{padding:14px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.line{display:grid;grid-template-columns:82px 78px 72px minmax(0,1fr);gap:10px;padding:3px 0;border-bottom:1px solid rgb(255 255 255 / 4%)}.time,.stream,.status{color:var(--muted)}.stream.stdin{color:var(--blue)}.status.failed,.line.failed .msg{color:var(--red)}.status.running{color:var(--green)}.composer{border-top:1px solid var(--line);background:var(--panel);padding:12px 14px;display:flex;gap:10px}.prompt{color:var(--green);font-weight:800;padding-top:10px}input{flex:1;background:#050505;border:1px solid var(--line);color:var(--ink);font:inherit;padding:10px 12px}button{background:var(--green);border:0;color:#041007;font:inherit;font-weight:900;padding:10px 14px;cursor:pointer}.hint{color:var(--muted);font-size:12px;margin-top:4px}@media(max-width:760px){header{display:block}.meta{text-align:left;margin-top:8px}.line{grid-template-columns:1fr}.composer{align-items:stretch}.prompt{display:none}}
+:root{color-scheme:dark;--bg:#020202;--panel:#101010;--ink:#f8f8f8;--muted:rgb(248 248 248 / 66%);--line:rgb(248 248 248 / 24%);--green:#7cff9b;--yellow:#facc15;--red:#ff7777;--blue:#77d7ff;font-family:"SFMono-Regular","Cascadia Code","Liberation Mono",Menlo,Consolas,monospace}*{box-sizing:border-box}body{margin:0;min-height:100vh;height:100vh;background:radial-gradient(circle at 20% 0%,#1d2b1f 0,#020202 34rem);color:var(--ink);display:grid;grid-template-rows:auto auto minmax(0,1fr) auto}header{border-bottom:1px solid var(--line);background:rgb(0 0 0 / 76%);padding:14px 16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}h1,p{margin:0}.eyebrow{color:var(--green);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}h1{margin-top:4px;font-size:23px}.meta{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;color:var(--muted);font-size:12px;text-align:right}.chip{border:1px solid var(--line);border-radius:999px;background:#050505;color:var(--muted);font-size:12px;font-weight:900;padding:5px 8px;text-transform:uppercase}.chip.live,.chip.running{color:var(--green);border-color:var(--green)}.chip.polling,.chip.starting{color:var(--yellow);border-color:var(--yellow)}.chip.error,.chip.failed{color:var(--red);border-color:var(--red)}.chip.stopped{color:var(--muted);border-color:var(--line)}.toolbar{border-bottom:1px solid var(--line);background:rgb(0 0 0 / 72%);padding:10px 14px;display:flex;flex-wrap:wrap;gap:8px}.terminal{padding:14px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.line{display:grid;grid-template-columns:82px 78px 72px minmax(0,1fr);gap:10px;padding:3px 0;border-bottom:1px solid rgb(255 255 255 / 4%)}.time,.stream,.status{color:var(--muted)}.stream.stdin{color:var(--blue)}.stream.stderr,.status.failed,.line.failed .msg{color:var(--red)}.stream.stdout,.status.running{color:var(--green)}.status.starting{color:var(--yellow)}.composer{border-top:1px solid var(--line);background:var(--panel);padding:12px 14px;display:flex;gap:10px}.prompt{color:var(--green);font-weight:800;padding-top:10px}input{flex:1;background:#050505;border:1px solid var(--line);color:var(--ink);font:inherit;padding:10px 12px}button{border:1px solid var(--line);background:#060606;color:var(--ink);font:inherit;font-size:12px;font-weight:900;padding:8px 10px;cursor:pointer}button:hover,button.active,.composer button{background:var(--green);border-color:var(--green);color:#041007}.danger:hover{background:var(--red);border-color:var(--red);color:#150707}.hint{color:var(--muted);font-size:12px;margin-top:4px}@media(max-width:760px){body{height:auto;min-height:100vh}header{display:block}.meta{justify-content:flex-start;text-align:left;margin-top:8px}.line{grid-template-columns:1fr}.composer{align-items:stretch}.prompt{display:none}}
 </style>
 </head>
 <body>
-<header><div><p class="eyebrow">Power Mine server terminal</p><h1>` + html.EscapeString(server.Name) + `</h1><p class="hint">Type Minecraft server commands without a slash, for example: say Hello or stop.</p></div><p class="meta">` + html.EscapeString(server.MinecraftVersion) + `<br/>Port ` + fmt.Sprintf("%d", server.Port) + `</p></header>
+<header><div><p class="eyebrow">Power Mine server terminal</p><h1>` + html.EscapeString(server.Name) + `</h1><p class="hint">Type Minecraft server commands without a slash, for example: say Hello or stop.</p></div><p class="meta"><span class="chip" id="statusChip">Stopped</span><span class="chip live" id="connectionChip">Live</span><span class="chip" id="countChip">0 events</span><span class="chip">` + html.EscapeString(server.MinecraftVersion) + `</span><span class="chip">Port ` + fmt.Sprintf("%d", server.Port) + `</span></p></header>
+<nav class="toolbar" aria-label="Terminal controls"><button class="active" data-filter="all" type="button">All</button><button data-filter="stdout" type="button">stdout</button><button data-filter="stderr" type="button">stderr</button><button data-filter="commands" type="button">commands</button><button data-filter="lifecycle" type="button">lifecycle</button><button data-filter="errors" type="button">errors</button><button id="followBtn" type="button">Follow on</button><button id="copyBtn" type="button">Copy visible</button><button class="danger" id="clearBtn" type="button">Clear visible</button></nav>
 <main class="terminal" id="terminal"><p class="hint">Loading terminal history...</p></main>
 <form class="composer" id="composer"><span class="prompt">&gt;</span><input id="command" autocomplete="off" spellcheck="false" placeholder="server command"/><button type="submit">Send</button></form>
 <script>
@@ -3351,18 +3420,65 @@ const serverID = ` + jsonString(serverID) + `;
 const terminal = document.getElementById('terminal');
 const form = document.getElementById('composer');
 const commandInput = document.getElementById('command');
+const statusChip = document.getElementById('statusChip');
+const connectionChip = document.getElementById('connectionChip');
+const countChip = document.getElementById('countChip');
+const followBtn = document.getElementById('followBtn');
+const copyBtn = document.getElementById('copyBtn');
+const clearBtn = document.getElementById('clearBtn');
+const filterButtons = Array.from(document.querySelectorAll('[data-filter]'));
 let lastRendered = '';
 let terminalEvents = [];
 let pollingTimer = 0;
+let activeFilter = 'all';
+let followLatest = true;
+let hiddenEventKeys = new Set();
 function esc(value){return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
 function lineKey(event){return [event.time,event.stream,event.status,event.message,event.exitCode].join('|');}
-function render(events){
-  const key = events.map(lineKey).join('\n');
+function eventKind(event){
+  const stream = String(event.stream || '').toLowerCase();
+  if (stream === 'stdout') return 'stdout';
+  if (stream === 'stderr') return 'stderr';
+  if (stream === 'stdin') return 'commands';
+  return 'lifecycle';
+}
+function matchesFilter(event){
+  if (activeFilter === 'all') return true;
+  if (activeFilter === 'errors') return event.status === 'failed' || event.stream === 'stderr';
+  return eventKind(event) === activeFilter;
+}
+function visibleEvents(){
+  const keys = new Set(terminalEvents.map(lineKey));
+  hiddenEventKeys.forEach(key => { if (!keys.has(key)) hiddenEventKeys.delete(key); });
+  return terminalEvents.filter(event => !hiddenEventKeys.has(lineKey(event)) && matchesFilter(event));
+}
+function latestStatus(){
+  for (let i = terminalEvents.length - 1; i >= 0; i--) {
+    if (terminalEvents[i].status) return terminalEvents[i].status;
+  }
+  return 'stopped';
+}
+function setConnection(state){
+  connectionChip.textContent = state;
+  connectionChip.className = 'chip ' + state.toLowerCase();
+}
+function labelStatus(status){return status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Stopped';}
+function updateHeader(events){
+  const status = latestStatus();
+  statusChip.textContent = labelStatus(status);
+  statusChip.className = 'chip ' + status;
+  countChip.textContent = events.length + ' visible / ' + terminalEvents.length + ' total';
+}
+function formatEvent(event){return '[' + (event.time || '') + '] [' + (event.status || '') + '] [' + (event.stream || 'event') + '] ' + (event.message || '') + (event.exitCode !== undefined ? ' (exit ' + event.exitCode + ')' : '');}
+function render(){
+  const events = visibleEvents();
+  updateHeader(events);
+  const key = activeFilter + '|' + events.map(lineKey).join('\n');
   if (key === lastRendered) return;
-  const stick = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 24;
+  const previousScroll = terminal.scrollTop;
   lastRendered = key;
-  terminal.innerHTML = events.length ? events.map(event => '<div class="line '+esc(event.status)+'"><span class="time">'+esc((event.time || '').slice(11,19))+'</span><span class="status '+esc(event.status)+'">'+esc(event.status || '')+'</span><span class="stream '+esc(event.stream)+'">'+esc(event.stream || 'event')+'</span><span class="msg">'+esc(event.message || '')+(event.exitCode !== undefined ? ' (exit '+esc(event.exitCode)+')' : '')+'</span></div>').join('') : '<p class="hint">No server output yet. Start the server from Power Mine, then keep this window open.</p>';
-  if (stick) terminal.scrollTop = terminal.scrollHeight;
+  terminal.innerHTML = events.length ? events.map(event => '<div class="line '+esc(event.status)+'"><span class="time">'+esc((event.time || '').slice(11,19))+'</span><span class="status '+esc(event.status)+'">'+esc(event.status || '')+'</span><span class="stream '+esc(event.stream)+'">'+esc(event.stream || 'event')+'</span><span class="msg">'+esc(event.message || '')+(event.exitCode !== undefined ? ' (exit '+esc(event.exitCode)+')' : '')+'</span></div>').join('') : '<p class="hint">' + (terminalEvents.length ? 'No server events match current filters.' : 'No server output yet. Start the server from Power Mine, then keep this window open.') + '</p>';
+  if (followLatest) terminal.scrollTop = terminal.scrollHeight; else terminal.scrollTop = previousScroll;
 }
 async function refresh(){
   try {
@@ -3370,30 +3486,58 @@ async function refresh(){
     if (!response.ok) throw new Error(await response.text());
     const data = await response.json();
     terminalEvents = Array.isArray(data.events) ? data.events : [];
-    render(terminalEvents);
+    render();
   } catch (error) {
+    setConnection('Error');
     terminal.innerHTML = '<p class="hint">' + esc(error.message || error) + '</p>';
   }
 }
 function startPolling(){
   if (pollingTimer) return;
+  setConnection('Polling');
   refresh();
   pollingTimer = setInterval(refresh, 750);
 }
 function connectStream(){
   if (!window.EventSource) { startPolling(); return; }
   const source = new EventSource('/api/server/' + serverID + '/stream?token=' + encodeURIComponent(token));
+  source.onopen = () => setConnection('Live');
   source.addEventListener('history', event => {
     const data = JSON.parse(event.data);
     terminalEvents = Array.isArray(data.events) ? data.events : [];
-    render(terminalEvents);
+    render();
   });
   source.addEventListener('server-event', event => {
     terminalEvents = [...terminalEvents, JSON.parse(event.data)].slice(-1000);
-    render(terminalEvents);
+    render();
   });
   source.onerror = () => { source.close(); startPolling(); };
 }
+function setFilter(filter){
+  activeFilter = filter;
+  filterButtons.forEach(button => button.classList.toggle('active', button.dataset.filter === activeFilter));
+  render();
+}
+function setFollow(enabled){
+  followLatest = enabled;
+  followBtn.textContent = followLatest ? 'Follow on' : 'Follow paused';
+  followBtn.classList.toggle('active', followLatest);
+}
+async function writeClipboard(text){
+  if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); return; }
+  const area = document.createElement('textarea');
+  area.value = text;
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand('copy');
+  area.remove();
+}
+filterButtons.forEach(button => button.addEventListener('click', () => setFilter(button.dataset.filter)));
+followBtn.addEventListener('click', () => setFollow(!followLatest));
+copyBtn.addEventListener('click', async () => {
+  try { await writeClipboard(visibleEvents().map(formatEvent).join('\n')); copyBtn.textContent = 'Copied'; setTimeout(() => { copyBtn.textContent = 'Copy visible'; }, 900); } catch (error) { alert(error.message || error); }
+});
+clearBtn.addEventListener('click', () => { visibleEvents().forEach(event => hiddenEventKeys.add(lineKey(event))); render(); });
 form.addEventListener('submit', async event => {
   event.preventDefault();
   const command = commandInput.value.trim();
@@ -3407,6 +3551,7 @@ form.addEventListener('submit', async event => {
     alert(error.message || error);
   }
 });
+setFollow(true);
 connectStream();
 commandInput.focus();
 </script>
