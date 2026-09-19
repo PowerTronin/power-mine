@@ -20,7 +20,9 @@ The visual smoke should prove that:
 - Home, Library, Create, Logs, and Settings are reachable;
 - profile/server cards stay compact and do not overflow the Library list;
 - local server create/install/start/stop/restart actions update the visible state;
-- app-owned logs and terminal windows open inside the launcher without spawning an external browser;
+- app-owned logs and terminal windows open as separate native utility windows without spawning an external browser;
+- detached logs and terminal utility controls work: filters, follow pause/resume, copy visible, and clear visible;
+- detached logs and terminal size/position persist across close/reopen;
 - failures show an error banner or log entry instead of hanging silently.
 
 ## Debian Lab Preparation
@@ -56,9 +58,12 @@ This is the baseline script for a Codex operator using `boxes` tools.
 9. Click Start; pass if the row/detail changes to `Installed / Running` or `Starting` without Java progress noise.
 10. Click Stop; wait for stopped state; pass if Start becomes enabled again.
 11. Click Start again; pass if restart works and the row returns to `Installed / Running`.
-12. Open Terminal for that server; pass if the app-owned terminal opens, shows recent server events, and accepts commands.
-13. Open Logs, then Open app window; pass if the app-owned logs window includes the profile/server actions.
-14. Capture final screenshots and summarize pass/fail with the screenshot checkpoints.
+12. Open Terminal for that server; pass if the app-owned terminal opens as a separate native window, shows recent server events, and accepts commands.
+13. In Terminal, verify filters, follow pause/resume, copy visible, clear visible, and placement restore after close/reopen.
+14. Open Logs, then Open app window; pass if the app-owned logs window opens as a separate native window and includes the profile/server actions.
+15. In Logs, verify filters, follow pause/resume, copy visible, clear visible, and placement restore after close/reopen.
+16. Close all Power Mine windows; pass if no `power-mine` helper processes remain.
+17. Capture final screenshots and summarize pass/fail with the screenshot checkpoints.
 
 ## Screenshot Checkpoints
 
@@ -74,7 +79,12 @@ Use these checkpoint names in reports so later sessions are comparable:
 - `server-stopped-start-enabled`
 - `server-restarted`
 - `server-terminal-opened`
+- `server-terminal-controls-verified`
+- `server-terminal-placement-restored`
 - `logs-app-window-opened`
+- `logs-controls-verified`
+- `logs-placement-restored`
+- `no-helper-processes-after-close`
 
 ## Pass/Fail Rules
 
@@ -84,7 +94,8 @@ Use these checkpoint names in reports so later sessions are comparable:
 - Fail if stdout/stderr log events make a stopped server look running again.
 - Fail if Stop succeeds but Start stays disabled after the server process exits.
 - Fail if Terminal or Open app window launches an external browser in the normal app-owned UI path.
-- Warn, not fail, if the app-owned terminal/logs are in-window overlays instead of separate OS-level windows.
+- Fail if Terminal or Open app window opens only as an in-window overlay instead of a separate OS-level window.
+- Fail if detached window placement is not restored after close/reopen on release artifacts.
 
 ## Hardening Follow-ups
 

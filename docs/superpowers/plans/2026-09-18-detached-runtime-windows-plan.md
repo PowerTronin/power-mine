@@ -25,7 +25,7 @@ Detached logs and server terminal now include utility-window controls for copyin
 
 Known follow-ups:
 
-- Run manual visual smoke on Linux and Windows release builds before making detached native windows part of release acceptance.
+- Run `docs/superpowers/plans/2026-09-19-detached-runtime-release-smoke-plan.md` before making detached native windows part of release acceptance.
 
 ## Product Decisions
 
