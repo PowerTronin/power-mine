@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"os"
+	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -25,6 +26,7 @@ func main() {
 
 	// Create an instance of the app structure
 	app := NewApp()
+	exitWatchdog := newWindowCloseExitWatchdog(30*time.Second, os.Exit)
 
 	// Create application with options
 	err := wails.Run(&options.App{
@@ -37,6 +39,7 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		OnBeforeClose:    exitWatchdog.beforeClose,
 		Bind: []interface{}{
 			app,
 		},

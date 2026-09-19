@@ -15,7 +15,13 @@ Make runtime tools feel like launcher-native utilities instead of browser tabs:
 
 ## Current Status
 
-As of `b3dfac4`, Wails v2.15 does not expose a suitable public multi-window API for this app, so the launcher uses app-owned in-window utilities for logs and local server terminals. Native separate OS-level windows remain a future implementation path; browser HTTP views are legacy/fallback only.
+As of `f948994`, detached runtime tools open as native OS-level Wails helper windows backed by the main launcher process. The helper window loads a loopback-only proxied view, keeps one window per logs/server target, and focuses the existing window when reopened. Browser HTTP views remain implementation fallback plumbing, not the primary user path.
+
+In the current lifecycle pass, main and helper windows also arm a close watchdog so window-manager close events cannot leave hidden Wails processes alive indefinitely.
+
+Known follow-ups:
+
+- Milestone 2 event synchronization exists through snapshots and backend event history, but needs a dedicated pass to verify live streaming and stale-state prevention under real launches.
 
 ## Product Decisions
 
@@ -28,6 +34,8 @@ As of `b3dfac4`, Wails v2.15 does not expose a suitable public multi-window API 
 ## Milestone 1: Native Window Host
 
 Goal: replace browser-tab launch with native Wails windows.
+
+Status: complete as of `f948994`.
 
 Tasks:
 

@@ -57,6 +57,7 @@ func runNativeWindow() int {
 		return 1
 	}
 	defer focusControl.shutdown(context.Background())
+	exitWatchdog := newWindowCloseExitWatchdog(2*time.Second, os.Exit)
 
 	err = wails.Run(&options.App{
 		Title:     config.title,
@@ -70,6 +71,7 @@ func runNativeWindow() int {
 		BackgroundColour: &options.RGBA{R: 5, G: 5, B: 5, A: 1},
 		OnStartup:        focusControl.setContext,
 		OnShutdown:       focusControl.shutdown,
+		OnBeforeClose:    exitWatchdog.beforeClose,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err.Error())
