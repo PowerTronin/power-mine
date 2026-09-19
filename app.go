@@ -58,6 +58,8 @@ type App struct {
 	externalToken    string
 	logsSnapshot     string
 	serverEvents     map[string][]domain.LocalServerEvent
+	nativeWindowMu   sync.Mutex
+	nativeWindows    map[string]*exec.Cmd
 	startupErr       error
 	headless         bool
 }
@@ -86,11 +88,12 @@ type modrinthInstallPlanState struct {
 
 func NewApp() *App {
 	return &App{
-		running:      make(map[string]*exec.Cmd),
-		launchDone:   make(map[string]chan struct{}),
-		serverInputs: make(map[string]io.WriteCloser),
-		stopping:     make(map[string]bool),
-		serverEvents: make(map[string][]domain.LocalServerEvent),
+		running:       make(map[string]*exec.Cmd),
+		launchDone:    make(map[string]chan struct{}),
+		serverInputs:  make(map[string]io.WriteCloser),
+		stopping:      make(map[string]bool),
+		serverEvents:  make(map[string][]domain.LocalServerEvent),
+		nativeWindows: make(map[string]*exec.Cmd),
 	}
 }
 
@@ -119,6 +122,7 @@ func (a *App) initServices(ctx context.Context, dataDir string) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	a.stopNativeWindowProcesses()
 	a.stopRunningLocalServers(15 * time.Second)
 	a.shutdownExternalWindowServer(ctx)
 }
@@ -804,7 +808,14 @@ func (a *App) OpenDetachedLogsWindow(snapshot string) error {
 	if err := a.ensureReady(); err != nil {
 		return err
 	}
-	return a.setLogsSnapshot(snapshot)
+	if err := a.setLogsSnapshot(snapshot); err != nil {
+		return err
+	}
+	targetURL, err := a.externalWindowURL("/logs")
+	if err != nil {
+		return err
+	}
+	return a.openNativeWindow("logs", targetURL, "Power Mine Logs", 1100, 760)
 }
 
 func (a *App) SyncDetachedLogsWindow(snapshot string) error {
@@ -818,10 +829,15 @@ func (a *App) OpenLocalServerTerminal(id string) error {
 	if err := a.ensureReady(); err != nil {
 		return err
 	}
-	if _, err := a.serverService.Get(id); err != nil {
+	server, err := a.serverService.Get(id)
+	if err != nil {
 		return err
 	}
-	return nil
+	targetURL, err := a.externalWindowURL("/server-terminal/" + url.PathEscape(id))
+	if err != nil {
+		return err
+	}
+	return a.openNativeWindow("server-terminal:"+id, targetURL, "Power Mine Terminal - "+server.Name, 1000, 720)
 }
 
 func (a *App) SendLocalServerCommand(id string, command string) error {

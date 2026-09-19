@@ -29,8 +29,10 @@ import {
     ListProfileMods,
     ListProfiles,
     ListLocalServers,
+    OpenDetachedLogsWindow,
     OpenLocalServerFolder,
     OpenLocalServerSettings,
+    OpenLocalServerTerminal,
     OpenProfileModsFolder,
     OpenProfileLogsFolder,
     PlanModrinthInstall,
@@ -51,6 +53,7 @@ import {
     SetProfileModEnabled,
     StartLocalServer,
     StopLocalServer,
+    SyncDetachedLogsWindow,
     UpdateModrinthModFile,
     UpdateModrinthModFiles,
     UpdateModrinthModVersionFiles,
@@ -253,6 +256,7 @@ function App() {
     const [modActionKey, setModActionKey] = useState('');
     const [gameLogActionKey, setGameLogActionKey] = useState('');
     const [logsWindowOpen, setLogsWindowOpen] = useState(false);
+    const [nativeLogsWindowActive, setNativeLogsWindowActive] = useState(false);
     const [terminalServerId, setTerminalServerId] = useState('');
     const [serverTerminalActionKey, setServerTerminalActionKey] = useState('');
     const [localServerTerminalEvents, setLocalServerTerminalEvents] = useState<Record<string, LocalServerEvent[]>>({});
@@ -522,6 +526,15 @@ function App() {
         }
     }, [terminalServerId, localServers]);
 
+    useEffect(() => {
+        if (!nativeLogsWindowActive) {
+            return;
+        }
+        SyncDetachedLogsWindow(detachedLogsSnapshot(launcherLogs, profiles, localServers)).catch((err) => {
+            setError(errorText(err));
+        });
+    }, [nativeLogsWindowActive, launcherLogs, profiles, localServers]);
+
     function appendLog(entry: Omit<LauncherLog, 'id' | 'time'>) {
         const next: LauncherLog = {
             ...entry,
@@ -531,14 +544,27 @@ function App() {
         setLauncherLogs((current) => [next, ...current]);
     }
 
-    function openDetachedLogsWindow() {
+    async function openDetachedLogsWindow() {
         setError('');
-        setLogsWindowOpen(true);
-        appendLog({
-            level: 'success',
-            source: 'Logs',
-            message: logsWindowOpen ? 'Detached logs window focused.' : 'Detached logs window opened.',
-        });
+        try {
+            await OpenDetachedLogsWindow(detachedLogsSnapshot(launcherLogs, profiles, localServers));
+            setNativeLogsWindowActive(true);
+            setLogsWindowOpen(false);
+            appendLog({
+                level: 'success',
+                source: 'Logs',
+                message: 'Native logs window opened.',
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            setLogsWindowOpen(true);
+            appendLog({
+                level: 'error',
+                source: 'Logs',
+                message: `Native logs window failed: ${text}. Using in-app logs window.`,
+            });
+        }
     }
 
     async function refreshApp() {
@@ -1157,16 +1183,29 @@ function App() {
         setLocalServerSettingsId('');
     }
 
-    function openLocalServerTerminal(id: string) {
+    async function openLocalServerTerminal(id: string) {
         setError('');
         setSelectedLocalServerId(id);
-        setTerminalServerId(id);
-        appendLog({
-            level: 'success',
-            source: 'Server terminal',
-            message: terminalServerId === id ? 'Local server terminal focused.' : 'Local server terminal opened.',
-            serverId: id,
-        });
+        try {
+            await OpenLocalServerTerminal(id);
+            setTerminalServerId((current) => current === id ? '' : current);
+            appendLog({
+                level: 'success',
+                source: 'Server terminal',
+                message: 'Native local server terminal opened.',
+                serverId: id,
+            });
+        } catch (err) {
+            const text = errorText(err);
+            setError(text);
+            setTerminalServerId(id);
+            appendLog({
+                level: 'error',
+                source: 'Server terminal',
+                message: `Native local server terminal failed: ${text}. Using in-app terminal.`,
+                serverId: id,
+            });
+        }
     }
 
     async function sendLocalServerTerminalCommand(id: string, command: string) {
@@ -5565,7 +5604,7 @@ function ClassicLogsPanel({
                         <p>{filteredLogs.length} visible events{errorCount > 0 ? ` / ${errorCount} errors` : ''}</p>
                     </div>
                     <div className="logs-actions">
-                        {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open app window</button>}
+                        {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open native window</button>}
                         <button
                             type="button"
                             disabled={!exportProfile || gameLogActionKey === `${exportProfile?.id}:logs:export`}
@@ -5642,7 +5681,7 @@ function ClassicLogsPanel({
                                 <p>{gameLogStatusText(gameProfile, gameLogList, selectedGameContent, liveGameLogs, gameFileName)}</p>
                             </div>
                             <div className="logs-actions">
-                                {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open app window</button>}
+                                {onOpenWindow && <button type="button" onClick={onOpenWindow}>Open native window</button>}
                                 <button type="button" disabled={!gameProfile} onClick={copyGameLog}>Copy visible</button>
                                 <button
                                     type="button"
@@ -5997,6 +6036,19 @@ function launcherLogExportText(logs: LauncherLog[], profiles: domain.Profile[], 
     const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
     const localServersById = new Map(localServers.map((server) => [server.id, server]));
     return [...logs].reverse().map((log) => formatLauncherLogLine(log, profilesById, localServersById)).join('\n');
+}
+
+function detachedLogsSnapshot(logs: LauncherLog[], profiles: domain.Profile[], localServers: domain.LocalServer[]) {
+    const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
+    const localServersById = new Map(localServers.map((server) => [server.id, server]));
+    return JSON.stringify({
+        logs: logs.map((log) => ({
+            ...log,
+            target: logProfileLabel(log, profilesById, localServersById),
+        })),
+        profiles: profiles.map((profile) => ({id: profile.id, name: profile.name})),
+        localServers: localServers.map((server) => ({id: server.id, name: server.name})),
+    });
 }
 
 function logExportMessage(result: domain.LogExportResult) {

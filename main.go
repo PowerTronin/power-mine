@@ -14,8 +14,13 @@ import (
 var assets embed.FS
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "headless" {
-		os.Exit(runHeadless(context.Background(), os.Args[2:]))
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "headless":
+			os.Exit(runHeadless(context.Background(), os.Args[2:]))
+		case nativeWindowCommand:
+			os.Exit(runNativeWindow())
+		}
 	}
 
 	// Create an instance of the app structure
