@@ -59,7 +59,7 @@ type App struct {
 	logsSnapshot     string
 	serverEvents     map[string][]domain.LocalServerEvent
 	nativeWindowMu   sync.Mutex
-	nativeWindows    map[string]*exec.Cmd
+	nativeWindows    map[string]*nativeWindowProcess
 	startupErr       error
 	headless         bool
 }
@@ -93,7 +93,7 @@ func NewApp() *App {
 		serverInputs:  make(map[string]io.WriteCloser),
 		stopping:      make(map[string]bool),
 		serverEvents:  make(map[string][]domain.LocalServerEvent),
-		nativeWindows: make(map[string]*exec.Cmd),
+		nativeWindows: make(map[string]*nativeWindowProcess),
 	}
 }
 

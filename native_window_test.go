@@ -105,3 +105,52 @@ func TestValidateNativeWindowTargetRequiresLoopbackHTTP(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeWindowConfigReadsFocusEndpoint(t *testing.T) {
+	t.Setenv(nativeWindowURLEnv, "http://127.0.0.1:1234/logs")
+	t.Setenv(nativeWindowTitleEnv, "Logs")
+	t.Setenv(nativeWindowWidthEnv, "900")
+	t.Setenv(nativeWindowHeightEnv, "700")
+	t.Setenv(nativeWindowFocusAddrEnv, "127.0.0.1:4321")
+	t.Setenv(nativeWindowFocusTokenEnv, "token")
+
+	config, err := nativeWindowConfigFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if config.target.String() != "http://127.0.0.1:1234/logs" {
+		t.Fatalf("unexpected target: %s", config.target.String())
+	}
+	if config.title != "Logs" || config.width != 900 || config.height != 700 {
+		t.Fatalf("unexpected window config: %#v", config)
+	}
+	if config.focusAddr != "127.0.0.1:4321" || config.focusToken != "token" {
+		t.Fatalf("unexpected focus config: %#v", config)
+	}
+}
+
+func TestValidateNativeWindowFocusAddrRequiresLoopbackIP(t *testing.T) {
+	cases := []struct {
+		name    string
+		addr    string
+		wantErr bool
+	}{
+		{name: "loopback", addr: "127.0.0.1:1234", wantErr: false},
+		{name: "ipv6 loopback", addr: "[::1]:1234", wantErr: false},
+		{name: "localhost", addr: "localhost:1234", wantErr: true},
+		{name: "external", addr: "192.168.1.10:1234", wantErr: true},
+		{name: "missing port", addr: "127.0.0.1", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateNativeWindowFocusAddr(tc.addr)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
