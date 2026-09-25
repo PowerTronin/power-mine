@@ -149,6 +149,24 @@ func TestSubscribeLocalServerEventsReceivesHistoryAndLiveUpdates(t *testing.T) {
 	}
 }
 
+func TestDetachedPagesFallbackToPollingWhenEventStreamIsSilent(t *testing.T) {
+	logsHTML := detachedLogsPageHTML("token")
+	if !strings.Contains(logsHTML, "receivedSnapshot") || !strings.Contains(logsHTML, "startPolling();") {
+		t.Fatal("expected detached logs page to fall back to polling when SSE does not deliver a snapshot")
+	}
+	if !strings.Contains(logsHTML, "refresh();\nconnectStream();") {
+		t.Fatal("expected detached logs page to load an initial snapshot before opening SSE")
+	}
+
+	terminalHTML := serverTerminalPageHTML("token", domain.LocalServer{ID: "server-1", Name: "Server"})
+	if !strings.Contains(terminalHTML, "receivedHistory") || !strings.Contains(terminalHTML, "startPolling();") {
+		t.Fatal("expected server terminal page to fall back to polling when SSE does not deliver history")
+	}
+	if !strings.Contains(terminalHTML, "refresh();\nconnectStream();") {
+		t.Fatal("expected server terminal page to load initial history before opening SSE")
+	}
+}
+
 func TestModrinthDependencySelectionMatchesVersionProjectOrFile(t *testing.T) {
 	selected := selectedModrinthDependencyMap([]string{"version-1", "project-2", "mod-3.jar"})
 

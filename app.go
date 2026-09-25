@@ -3358,12 +3358,16 @@ function startPolling(){
 }
 function connectStream(){
   if (!window.EventSource) { startPolling(); return; }
+  let receivedSnapshot = false;
   const source = new EventSource('/api/logs/stream?token=' + encodeURIComponent(token));
+  const fallback = setTimeout(() => { if (!receivedSnapshot) { source.close(); startPolling(); } }, 1500);
   source.onopen = () => setConnection('Live');
   source.addEventListener('snapshot', event => {
+    receivedSnapshot = true;
+    clearTimeout(fallback);
     try { render(JSON.parse(event.data)); } catch (error) { setConnection('Error'); }
   });
-  source.onerror = () => { source.close(); startPolling(); };
+  source.onerror = () => { clearTimeout(fallback); source.close(); startPolling(); };
 }
 function setFilter(filter){
   activeFilter = filter;
@@ -3391,6 +3395,7 @@ copyBtn.addEventListener('click', async () => {
 });
 clearBtn.addEventListener('click', () => { visibleLogs().forEach(log => hiddenLogKeys.add(logKey(log))); render(latestData); });
 setFollow(true);
+refresh();
 connectStream();
 </script>
 </body>
@@ -3500,9 +3505,13 @@ function startPolling(){
 }
 function connectStream(){
   if (!window.EventSource) { startPolling(); return; }
+  let receivedHistory = false;
   const source = new EventSource('/api/server/' + serverID + '/stream?token=' + encodeURIComponent(token));
+  const fallback = setTimeout(() => { if (!receivedHistory) { source.close(); startPolling(); } }, 1500);
   source.onopen = () => setConnection('Live');
   source.addEventListener('history', event => {
+    receivedHistory = true;
+    clearTimeout(fallback);
     const data = JSON.parse(event.data);
     terminalEvents = Array.isArray(data.events) ? data.events : [];
     render();
@@ -3511,7 +3520,7 @@ function connectStream(){
     terminalEvents = [...terminalEvents, JSON.parse(event.data)].slice(-1000);
     render();
   });
-  source.onerror = () => { source.close(); startPolling(); };
+  source.onerror = () => { clearTimeout(fallback); source.close(); startPolling(); };
 }
 function setFilter(filter){
   activeFilter = filter;
@@ -3552,6 +3561,7 @@ form.addEventListener('submit', async event => {
   }
 });
 setFollow(true);
+refresh();
 connectStream();
 commandInput.focus();
 </script>
